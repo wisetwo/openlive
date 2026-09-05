@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type { SseEvent, MessageBlock, LiveServerMsg } from "@openlive/shared";
-import { LIVE_TAG, liveClientMsgSchema, agentLabel, type AgentMetaWire } from "@openlive/shared";
+import { LIVE_TAG, liveClientMsgSchema, agentLabel, englishCoachModelHistory, parseEnglishCoachResponse, suppressRedundantCoachCorrection, type AgentMetaWire, type SessionKind } from "@openlive/shared";
 import { createChat, addMessage, listMessages, renameChat, getSetting, setSetting, setChatContext } from "@openlive/db";
 import type { Message } from "@openlive/harness";
 import type { Emit, OpenLiveTool } from "../tools.js";
@@ -229,7 +229,7 @@ export class LiveSession {
         if (r) { this.bridgePending.delete(msg.reqId); r(msg.output); }
         return;
       }
-      case "bind": return this.applyBind(msg.agentId, msg.cwd, msg.resumeSessionId);
+      case "bind": return this.applyBind(msg.agentId, msg.cwd, msg.resumeSessionId, msg.kind);
       case "permission_response": {
         this.permPending.get(msg.reqId)?.(msg.optionId); // settle() clears the map + notifies the client
         return;
@@ -326,6 +326,14 @@ export class LiveSession {
       if (ac.signal.aborted && this.bargeSpoken != null) truncateSpokenText(blocks, this.bargeSpoken);
       this.bargeSpoken = null;
       scrubControlTokens(blocks);
+      if (!ac.signal.aborted && this.runner.isCoach()) {
+        const raw = blocks.filter((b): b is Extract<MessageBlock, { type: "text" }> => b.type === "text").map((b) => b.text).join("");
+        const tagged = englishCoachModelHistory(suppressRedundantCoachCorrection(parseEnglishCoachResponse(raw), text));
+        const rest = blocks.filter((b) => b.type !== "text");
+        blocks.length = 0;
+        if (tagged) blocks.push({ type: "text", text: tagged });
+        blocks.push(...rest);
+      }
       // Snapshot live terminal output into its tool calls + settle unfinished
       // statuses (pending/in_progress → canceled) before the turn is persisted.
       finalizeToolBlocks(blocks, foldCtx);
@@ -392,13 +400,9 @@ export class LiveSession {
    *  folder. Rebuilds + reconnects the ACP agent when the agent OR folder changes;
    *  a no-op when neither did (an agent's cwd is fixed at spawn, so a folder switch
    *  means a restart). */
-  private async applyBind(id: AgentId | null, cwd?: string, resumeSessionId?: string) {
-    // Re-entrancy guard: applyBind awaits several writes, and binds can overlap (a
-    // fast agent/folder switch, or a resume racing a reconnect). Stamp an epoch and
-    // bail the moment a newer bind supersedes this one — otherwise two runs each spawn
-    // an agent and the older one leaks an orphaned ACP child-process tree.
+  private async applyBind(id: AgentId | null, cwd?: string, resumeSessionId?: string, kind?: SessionKind) {
     const epoch = ++this.bindEpoch;
-    const run = this.applyBindInner(id, cwd, resumeSessionId, epoch);
+    const run = this.applyBindInner(id, cwd, resumeSessionId, epoch, kind);
     this.lastBind = run.catch(() => {});
     await run;
     // Authoritative echo — whatever this bind attempt ended up with (including the
@@ -409,7 +413,9 @@ export class LiveSession {
     }
   }
 
-  private async applyBindInner(id: AgentId | null, cwd: string | undefined, resumeSessionId: string | undefined, epoch: number) {
+  private async applyBindInner(id: AgentId | null, cwd: string | undefined, resumeSessionId: string | undefined, epoch: number, kind?: SessionKind) {
+    if (kind) this.runner.setMode(kind);
+    if (kind === "english-coach") id = null;
     // These two MUST land before agentCwd()/createBoundAgent read them back.
     if (cwd !== undefined && this.chatId) await setSetting(`agentCwd:${this.chatId}`, cwd);
     // Resuming one of the agent's OWN prior sessions (from History): stamp its ACP

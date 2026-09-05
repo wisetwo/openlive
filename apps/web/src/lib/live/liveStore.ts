@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ModelProgress } from "./models";
 import type { AgentId, AgentMeta, ElicitationWire, PermissionOption } from "./liveClient";
+import type { SessionKind } from "@openlive/shared";
 
 export type LivePhase = "off" | "connecting" | "loading" | "reconnecting" | "idle" | "listening" | "thinking" | "speaking";
 
@@ -31,6 +32,7 @@ interface LiveState {
   pttEnabled: boolean;      // push-to-talk armed (opt-in via the in-call toggle; persisted)
   warming: boolean;   // true from socket-open until the agent signals warm-ready → shows "Warming up…"
   boundAgent: AgentId | null;         // coding agent this conversation talks to (null = built-in brain)
+  sessionKind: SessionKind;           // "english-coach" is a spoken lesson on the built-in model
   boundCwd: string;                   // project folder for the bound agent ("" = default/home)
   agentMeta: AgentMeta | null;        // the bound agent's selectable models + modes (once connected)
   agentConnecting: boolean;           // pre-call: connecting to the bound agent to fetch its models/modes
@@ -87,6 +89,7 @@ export const useLiveStore = create<LiveState>((set) => ({
   pttActive: false,
   warming: false,
   boundAgent: null,
+  sessionKind: "live",
   boundCwd: "",
   agentMeta: null,
   agentConnecting: false,

@@ -22,7 +22,9 @@ export const FIRST_TTS_CHARS = 24; // but the FIRST chunk of a reply speaks at a
 const HALLUCINATIONS = new Set(["", "you", "thank you", "thank you.", "thanks for watching", "thank you for watching", "thanks for watching!", "please subscribe", "subtitles by the amara.org community"]);
 
 export function isJunk(text: string): boolean {
-  const t = text.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  const raw = text.trim();
+  if (/\p{Script=Han}/u.test(raw)) return false;
+  const t = raw.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
   return t.length < 2 || HALLUCINATIONS.has(t);
 }
 

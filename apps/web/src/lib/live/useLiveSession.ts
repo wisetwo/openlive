@@ -15,6 +15,8 @@ import { kindMeta } from "./toolMeta";
 import { classifyYesNo, buildElicitationAnswer } from "./modalAnswer";
 import { log } from "@/lib/log";
 import { useLiveStore } from "./liveStore";
+import { CoachSpeechPump } from "./coachSpeech";
+import type { SessionKind } from "@openlive/shared";
 
 const NO_BANDS = [0, 0, 0, 0, 0];
 
@@ -37,8 +39,25 @@ function readBind(chatId: string): AgentId | null {
  *  the change to the server via its boundAgent effect. Usable outside the call
  *  (e.g. the top-bar selector) — takes effect on the next connect if idle. */
 export function setConversationBind(chatId: string, agentId: AgentId | null) {
-  useLiveStore.getState().set({ boundAgent: agentId });
-  try { localStorage.setItem(`openlive-bind:${chatId}`, agentId ?? ""); } catch { /* private mode */ }
+  useLiveStore.getState().set({ boundAgent: agentId, sessionKind: "live" });
+  try {
+    localStorage.setItem(`openlive-bind:${chatId}`, agentId ?? "");
+    localStorage.setItem(`openlive-kind:${chatId}`, "live");
+  } catch { /* private mode */ }
+}
+
+function readKind(chatId: string): SessionKind {
+  try { return localStorage.getItem(`openlive-kind:${chatId}`) === "english-coach" ? "english-coach" : "live"; }
+  catch { return "live"; }
+}
+
+/** Spoken English-coach session vs ordinary live. Coach unbinds any coding agent. */
+export function setConversationKind(chatId: string, kind: SessionKind) {
+  useLiveStore.getState().set({ sessionKind: kind, ...(kind === "english-coach" ? { boundAgent: null } : {}) });
+  try {
+    localStorage.setItem(`openlive-kind:${chatId}`, kind);
+    if (kind === "english-coach") localStorage.setItem(`openlive-bind:${chatId}`, "");
+  } catch { /* private mode */ }
 }
 
 function readCwd(chatId: string): string {
@@ -132,8 +151,10 @@ export function useLiveSession(chatId: string) {
   const set = useLiveStore((s) => s.set);
   const boundAgent = useLiveStore((s) => s.boundAgent);
   const boundCwd = useLiveStore((s) => s.boundCwd);
+  const sessionKind = useLiveStore((s) => s.sessionKind);
   const client = useRef<LiveClient | null>(null);
   const engine = useRef<VoiceEngine | null>(null);
+  const coachPump = useRef(new CoachSpeechPump());
   const player = useRef<AudioPlayer | null>(null);
   const camRef = useRef<CameraCapture | null>(null);
   const screenRef = useRef<CameraCapture | null>(null);
@@ -246,7 +267,7 @@ export function useLiveSession(chatId: string) {
   const ensureClient = useCallback((): LiveClient => {
     if (client.current) return client.current;
     const c = new LiveClient({
-      onOpen: () => { set({ phase: "idle", error: undefined, warming: true }); const st = useLiveStore.getState(); client.current?.bind(st.boundAgent, st.boundCwd, readResume(chatId) || undefined); },
+      onOpen: () => { set({ phase: "idle", error: undefined, warming: true }); const st = useLiveStore.getState(); client.current?.bind(st.boundAgent, st.boundCwd, readResume(chatId) || undefined, st.sessionKind); },
       onReconnecting: () => set({ phase: "reconnecting" }),
       onClose: () => teardown(),
       onError: (m) => set({ error: m, agentConnecting: false }),
@@ -327,7 +348,7 @@ export function useLiveSession(chatId: string) {
         // Client has a folder the server didn't apply (a dropped/raced bind):
         // re-push once, then surface instead of looping.
         if (agentId && st.boundCwd && !cwd) {
-          if (!cwdHealTried.current) { cwdHealTried.current = true; client.current?.bind(agentId, st.boundCwd); return; }
+          if (!cwdHealTried.current) { cwdHealTried.current = true; client.current?.bind(agentId, st.boundCwd, undefined, st.sessionKind); return; }
           set({ error: `${agentLabel(agentId)} didn't get the project folder — pick it again from the top bar.`, agentConnecting: false });
         }
       },
@@ -349,11 +370,23 @@ export function useLiveSession(chatId: string) {
         // Prose text drives the VOICE only; the chat transcript is filled word-by-word
         // as each chunk is spoken (onAgentText), NOT from the generated stream (which
         // races ahead) — so an interrupt leaves the panel showing only what was said.
-        if (e.type === "text_delta") { engine.current?.feedAgentDelta(e.text); return; }
+        if (e.type === "text_delta") {
+          if (useLiveStore.getState().sessionKind === "english-coach") {
+            for (const line of coachPump.current.push(e.text)) engine.current?.speakLine(line);
+            if (assistantId.current) chatStore.liveCoach(chatId, assistantId.current, coachPump.current.turn);
+            return;
+          }
+          engine.current?.feedAgentDelta(e.text);
+          return;
+        }
         // Reasoning streams into the transcript's work block (interleaved with tools).
         if (e.type === "reasoning_delta") { closeSpokenSegment(); if (assistantId.current) chatStore.liveReason(chatId, assistantId.current, e.text); return; }
         if (e.type === "done") {
           set({ toolStatus: "" });
+          if (useLiveStore.getState().sessionKind === "english-coach") {
+            for (const line of coachPump.current.flush()) engine.current?.speakLine(line);
+            if (assistantId.current) chatStore.liveCoach(chatId, assistantId.current, coachPump.current.turn);
+          }
           engine.current?.endAgentTurn();
           // A long-running turn finished while you were in another app (mini-mode
           // workflow) — quick answers don't notify. Main shows it only if unfocused.
@@ -437,6 +470,7 @@ export function useLiveSession(chatId: string) {
   // assistant (its models come from the provider API) or if already connected.
   const prewarm = useCallback(() => {
     const st = useLiveStore.getState();
+    if (st.sessionKind === "english-coach") return;
     if (!st.boundAgent || !st.boundCwd || client.current) return;
     tornDown.current = false;
     set({ agentConnecting: true, agentMeta: null, error: undefined });
@@ -469,6 +503,12 @@ export function useLiveSession(chatId: string) {
       if (ttsCfg.engine === "clone" && ttsCfg.voice) {
         void fetch("/api/voice/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Hi.", profileId: ttsCfg.voice }) }).catch(() => {});
       }
+      const sttCfg = (await import("./pipelineConfig")).loadPipelineConfig().stt;
+      if (useLiveStore.getState().sessionKind === "english-coach" && sttCfg.engine === "qwen3") {
+        void fetch("/api/voice/asr").then((r) => r.json()).then((s: { installed?: boolean }) => {
+          if (!s.installed) toast("Qwen3 speech recognition isn't downloaded — using Whisper until you install it in Settings → Pipeline.");
+        }).catch(() => {});
+      }
 
       // 2. Mic stream — chosen device + browser AEC (so the agent's own voice is
       //    cancelled from the mic and can't self-trigger barge-in).
@@ -494,6 +534,7 @@ export function useLiveSession(chatId: string) {
         // audio so the panel shows exactly what's been said (honest on barge-in).
         onAgentText: (sentence, durationMs) => {
           set({ agentCaption: sentence, agentCaptionMs: durationMs });
+          if (useLiveStore.getState().sessionKind === "english-coach") return;
           const id = assistantId.current;
           // The previous chunk's audio has finished (this one is now playing) — commit
           // it into the current segment.
@@ -548,7 +589,7 @@ export function useLiveSession(chatId: string) {
         // answered. handleUserText routes the utterance to whichever modal is open
         // (yes/no for permission, form-fill for elicitation) — fully hands-free.
         holdBargeIn: () => { const s = useLiveStore.getState(); return !!s.permission || !!s.elicitation; },
-      }, player.current ?? undefined);
+      }, player.current ?? undefined, useLiveStore.getState().sessionKind === "english-coach");
       engine.current = eng;
       await eng.start(stream);
       if (tornDown.current) return;
@@ -642,17 +683,17 @@ export function useLiveSession(chatId: string) {
 
   // Reflect this conversation's saved agent + project folder in the store when it
   // opens, so the pre-call pickers show the right values before the call starts.
-  useEffect(() => { set({ boundAgent: readBind(chatId), boundCwd: readCwd(chatId), agentMeta: null }); }, [chatId, set]);
+  useEffect(() => { set({ boundAgent: readBind(chatId), boundCwd: readCwd(chatId), sessionKind: readKind(chatId), agentMeta: null }); }, [chatId, set]);
 
   // Push an agent OR folder change to the server whenever it flips during an active
   // call (the initial bind is also sent on socket open). Idle changes persist locally.
   useEffect(() => {
     if (!client.current?.ready) return;
     // A bound agent's models/modes are agent-specific — clear + re-fetch on a switch.
-    set({ agentMeta: null, agentConnecting: !!boundAgent && !!boundCwd });
-    client.current.bind(boundAgent, boundCwd);
+    set({ agentMeta: null, agentConnecting: !!boundAgent && !!boundCwd && sessionKind !== "english-coach" });
+    client.current.bind(boundAgent, boundCwd, undefined, sessionKind);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boundAgent, boundCwd]);
+  }, [boundAgent, boundCwd, sessionKind]);
 
   // A completed user turn: attach the freshest camera frame, send the text, and
   // reflect the exchange in the chat store (so it renders + persists like typing).
@@ -666,13 +707,18 @@ export function useLiveSession(chatId: string) {
     // can both be on), inline with the turn so the model sees exactly this moment.
     const st0 = useLiveStore.getState();
     const frames: { data: string; mime: string; source: "camera" | "screen" }[] = [];
-    if (st0.cameraOn && camRef.current) { const j = await camRef.current.captureFreshest(); if (j) frames.push({ data: abToBase64(j), mime: "image/jpeg", source: "camera" }); }
-    if (st0.screenOn && screenRef.current) { const j = await screenRef.current.captureFreshest(); if (j) frames.push({ data: abToBase64(j), mime: "image/jpeg", source: "screen" }); }
+    if (st0.sessionKind === "english-coach") {
+      // Coach is a language lesson — skip camera/screen frames (they confuse the tagged reply).
+    } else {
+      if (st0.cameraOn && camRef.current) { const j = await camRef.current.captureFreshest(); if (j) frames.push({ data: abToBase64(j), mime: "image/jpeg", source: "camera" }); }
+      if (st0.screenOn && screenRef.current) { const j = await screenRef.current.captureFreshest(); if (j) frames.push({ data: abToBase64(j), mime: "image/jpeg", source: "screen" }); }
+    }
     client.current?.userText(text, frames);
     turnStartedAt.current = Date.now();
     set({ userCaption: "", userPartial: false, agentCaption: "" });
     if (assistantId.current) chatStore.liveFinish(chatId, assistantId.current);
     resetTranscript(); // new turn → the word reveal starts fresh (don't carry prior spoken text)
+    coachPump.current.reset(text);
     assistantId.current = chatStore.liveUserTurn(chatId, text);
   }, [chatId, set, answerModalByVoice]);
 

@@ -14,16 +14,18 @@ test("partial input keeps given fields, fills the rest from defaults", () => {
   assert.equal(m.tts.voice, "am_onyx");
   assert.equal(m.tts.speed, DEFAULT_PIPELINE_CONFIG.tts.speed);
   assert.equal(m.stt.whisperSize, "small");
+  assert.equal(m.stt.engine, "qwen3");
   assert.equal(m.turn.engine, "smart-turn");
 });
 
 test("unknown enum/voice values fall back to defaults", () => {
   assert.equal(mergePipelineConfig({ tts: { voice: "zz_bogus" } }).tts.voice, "af_heart");
   assert.equal(mergePipelineConfig({ stt: { whisperSize: "gigantic" } }).stt.whisperSize, "base");
+  assert.equal(mergePipelineConfig({ stt: { engine: "moonshine" } }).stt.engine, "qwen3");
   assert.equal(mergePipelineConfig({ turn: { engine: "telepathy" } }).turn.engine, "smart-turn");
 });
 
-const full = (over: object) => ({ stt: { whisperSize: "base" }, tts: { voice: "af_heart", speed: 1 }, turn: { engine: "smart-turn", threshold: 0.5, holdMs: 4000 }, vad: { speechThreshold: 0.5, redemptionMs: 550 }, ...over });
+const full = (over: object) => ({ stt: { whisperSize: "base", engine: "qwen3" }, tts: { voice: "af_heart", speed: 1 }, turn: { engine: "smart-turn", threshold: 0.5, holdMs: 4000 }, vad: { speechThreshold: 0.5, redemptionMs: 550 }, ...over });
 
 test("out-of-range numbers clamp", () => {
   assert.equal(clampPipelineConfig(full({ tts: { voice: "af_heart", speed: 99 } })).tts.speed, 2);

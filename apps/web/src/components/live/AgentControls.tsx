@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Check, ShieldQuestion } from "lucide-react";
+import { ChevronDown, Check, ShieldQuestion, GraduationCap } from "lucide-react";
+import { setConversationBind, setConversationKind } from "@/lib/live/useLiveSession";
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_LIST, agentLabel } from "@openlive/shared";
 import { api } from "@/lib/api";
 import { useLiveStore } from "@/lib/live/liveStore";
-import { setConversationBind } from "@/lib/live/useLiveSession";
 import type { AgentId } from "@/lib/live/liveClient";
 import { AgentIcon } from "./AgentIcon";
 import { OpenLiveOrb } from "@/components/OpenLiveOrb";
@@ -27,8 +27,10 @@ function useNoDrag(): string {
 }
 
 // The built-in assistant + every registry agent, in canonical order.
-const OPTIONS: { id: AgentId | null; label: string }[] = [
-  { id: null, label: "OpenLive" },
+type TalkId = AgentId | "english-coach" | "";
+const OPTIONS: { id: TalkId; label: string }[] = [
+  { id: "", label: "OpenLive" },
+  { id: "english-coach", label: "English Coach" },
   ...AGENT_LIST.map((a) => ({ id: a.id as AgentId, label: a.label })),
 ];
 
@@ -36,7 +38,18 @@ const OPTIONS: { id: AgentId | null; label: string }[] = [
  *  visible even when hidden, so an old conversation still shows what it talks to. */
 function useVisibleOptions(boundAgent: AgentId | null) {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: api.settings });
-  return OPTIONS.filter((o) => !o.id || o.id === boundAgent || settings?.[`agentHidden:${o.id}`] !== "1");
+  return OPTIONS.filter((o) => !o.id || o.id === "english-coach" || o.id === boundAgent || settings?.[`agentHidden:${o.id}`] !== "1");
+}
+
+function talkIcon(id: TalkId, className = "size-4") {
+  if (id === "english-coach") return <GraduationCap className={className} />;
+  if (id) return <AgentIcon id={id} className={className} />;
+  return <OpenLiveOrb size={16} />;
+}
+
+function pickTalkTarget(chatId: string, id: TalkId) {
+  if (id === "english-coach") setConversationKind(chatId, "english-coach");
+  else setConversationBind(chatId, (id || null) as AgentId | null);
 }
 
 export { agentLabel };
@@ -49,10 +62,12 @@ export { agentLabel };
 export function AgentQuickPick() {
   const activeChatId = useUi((s) => s.activeChatId);
   const boundAgent = useLiveStore((s) => s.boundAgent);
+  const sessionKind = useLiveStore((s) => s.sessionKind);
   const options = useVisibleOptions(boundAgent);
   const { data: rows } = useQuery({ queryKey: ["agents"], queryFn: api.agents });
-  const gapOf = (id: AgentId | null): string | undefined => {
-    if (!id) return undefined;
+  const value: TalkId = sessionKind === "english-coach" ? "english-coach" : (boundAgent ?? "");
+  const gapOf = (id: TalkId): string | undefined => {
+    if (!id || id === "english-coach") return undefined;
     const r = rows?.find((x) => x.id === id);
     if (!r) return undefined;
     if (!r.installed) return "Not installed";
@@ -62,13 +77,13 @@ export function AgentQuickPick() {
   return (
     <Picker
       ariaLabel="Talk to"
-      value={boundAgent ?? ""}
-      onChange={(id) => { if (activeChatId) setConversationBind(activeChatId, (id || null) as AgentId | null); }}
+      value={value}
+      onChange={(id) => { if (activeChatId) pickTalkTarget(activeChatId, id as TalkId); }}
       options={options.map((o) => ({
-        id: o.id ?? "",
+        id: o.id,
         name: o.label,
         detail: gapOf(o.id),
-        icon: o.id ? <AgentIcon id={o.id} className="size-4" /> : <OpenLiveOrb size={16} />,
+        icon: talkIcon(o.id),
       }))}
     />
   );
@@ -79,11 +94,13 @@ export function AgentQuickPick() {
 export function AgentSelect() {
   const activeChatId = useUi((s) => s.activeChatId);
   const boundAgent = useLiveStore((s) => s.boundAgent);
+  const sessionKind = useLiveStore((s) => s.sessionKind);
   const options = useVisibleOptions(boundAgent);
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const noDrag = useNoDrag();
   const { open, mounted, requestClose, toggle } = useMenuPresence(menuRef);
+  const value: TalkId = sessionKind === "english-coach" ? "english-coach" : (boundAgent ?? "");
 
   useEffect(() => {
     if (!open) return;
@@ -93,22 +110,22 @@ export function AgentSelect() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const current = options.find((o) => o.id === boundAgent) ?? options[0]!;
+  const current = options.find((o) => o.id === value) ?? options[0]!;
 
   return (
     <div ref={ref} className={cn("relative", noDrag)}>
       <button onClick={toggle}
         className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-body text-muted-foreground transition hover:bg-foreground/10 hover:text-foreground">
-        {boundAgent ? <AgentIcon id={boundAgent} className="size-4" /> : <OpenLiveOrb size={16} />} {current.label} <ChevronDown className={cn("size-3.5 transition", open && "rotate-180")} />
+        {talkIcon(current.id)} {current.label} <ChevronDown className={cn("size-3.5 transition", open && "rotate-180")} />
       </button>
       {mounted && (
         <div ref={menuRef} className="absolute left-0 z-50 mt-1.5 w-56 overflow-hidden rounded-xl border border-border bg-popover shadow-xl">
           {options.map((o) => (
-            <button key={o.id ?? "chat"} onClick={() => { if (activeChatId) setConversationBind(activeChatId, o.id); requestClose(); }}
+            <button key={o.id || "chat"} onClick={() => { if (activeChatId) pickTalkTarget(activeChatId, o.id); requestClose(); }}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-body text-foreground transition hover:bg-foreground/[0.06]">
-              {o.id ? <AgentIcon id={o.id} className="size-4" /> : <OpenLiveOrb size={16} />}
+              {talkIcon(o.id)}
               <span className="flex-1">{o.label}</span>
-              {o.id === boundAgent && <Check className="size-3.5 text-success" />}
+              {o.id === value && <Check className="size-3.5 text-success" />}
             </button>
           ))}
         </div>

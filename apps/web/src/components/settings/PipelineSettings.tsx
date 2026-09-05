@@ -120,18 +120,90 @@ function MicStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
 function SttStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
   return (
     <div className="space-y-4">
-      <StageHead title="Speech-to-text" desc="Transcribes your voice on-device. Larger models are more accurate but heavier — the defaults favor modest machines; pick a bigger one if your device can carry it. Applies on the next call." />
-      <EngineCard name="Whisper" desc="OpenAI Whisper via transformers.js — runs on WebGPU with a WASM fallback." />
+      <StageHead title="Speech-to-text" desc="Transcribes your voice on-device. Ordinary calls always use Whisper. English Coach can use Qwen3-ASR (better at Chinese/English mix) when it's installed." />
+      <EngineCard name="Whisper" desc="OpenAI Whisper via transformers.js — runs on WebGPU with a WASM fallback. Used for every call, and as the Coach fallback." />
       <label className="flex flex-col gap-1.5">
-        <span className="text-label text-foreground">Model size</span>
-        <select value={cfg.stt.whisperSize} onChange={(e) => update({ ...cfg, stt: { whisperSize: e.target.value as PipelineConfig["stt"]["whisperSize"] } })} className={selectClass}>
+        <span className="text-label text-foreground">Whisper model size</span>
+        <select value={cfg.stt.whisperSize} onChange={(e) => update({ ...cfg, stt: { ...cfg.stt, whisperSize: e.target.value as PipelineConfig["stt"]["whisperSize"] } })} className={selectClass}>
           {WHISPER_SIZES.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </label>
       {!hasWebGPU() && <p className="-mt-2 text-caption text-faint">WebGPU isn&apos;t available here, so calls run the Tiny model regardless — the size choice applies when WebGPU is.</p>}
       {cfg.stt.whisperSize === "large-v3-turbo" && <p className="-mt-2 text-caption text-faint">A big download and a real GPU-memory footprint — expect the best transcription, but drop back to Small if your machine struggles.</p>}
       <ModelStatus removeKind="whisper" />
+
+      <StageHead title="English coach recognition" desc="Only used in English Coach sessions. Qwen3-ASR 0.6B INT8 runs in the local agent (same stack as Clone Voice). About 800 MB compressed — removable anytime." />
+      <label className="flex flex-col gap-1.5">
+        <span className="text-label text-foreground">Coach engine</span>
+        <select value={cfg.stt.engine} onChange={(e) => update({ ...cfg, stt: { ...cfg.stt, engine: e.target.value as PipelineConfig["stt"]["engine"] } })} className={selectClass}>
+          <option value="qwen3">Qwen3-ASR 0.6B · INT8 — best for Chinese/English mix</option>
+          <option value="whisper">Whisper — same model as ordinary calls</option>
+        </select>
+      </label>
+      {cfg.stt.engine === "qwen3" && <QwenAsrInstall />}
     </div>
+  );
+}
+
+type AsrModelState = { installed: boolean; downloading: boolean; downloadBytes: number; diskBytes: number };
+
+function QwenAsrInstall() {
+  const { data: model, refetch } = useQuery<AsrModelState>({ queryKey: ["qwen3-asr"], queryFn: () => fetch("/api/voice/asr").then((r) => r.json()) });
+  const [progress, setProgress] = useState<number | null>(null);
+  const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+
+  const download = async () => {
+    setProgress(0);
+    try {
+      const res = await fetch("/api/voice/asr/download", { method: "POST" });
+      const reader = res.body?.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      if (reader) for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n"); buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const m = JSON.parse(line) as { loaded?: number; total?: number; error?: string };
+          if (m.error) throw new Error(m.error);
+          if (m.loaded && m.total) setProgress(m.loaded / m.total);
+        }
+      }
+      toast("Qwen3 speech recognition installed — English Coach will use it next call.");
+    } catch (e) {
+      log.error("asr", "download:", e);
+      toast(`Download failed: ${String((e as Error)?.message ?? e)}`);
+    } finally { setProgress(null); void refetch(); }
+  };
+
+  const remove = async () => {
+    await fetch("/api/voice/asr", { method: "DELETE" }).catch(() => {});
+    void refetch();
+    toast("Qwen3-ASR removed. English Coach will use Whisper until you install it again.");
+  };
+
+  if (!model) return <p className="text-label text-muted-foreground">Checking…</p>;
+  if (progress !== null || model.downloading) return (
+    <div className="flex max-w-md flex-col gap-1.5">
+      <div className="h-1.5 overflow-hidden rounded-full bg-foreground/10">
+        <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${Math.round((progress ?? 0) * 100)}%` }} />
+      </div>
+      <p className="text-caption text-faint">Downloading… {Math.round((progress ?? 0) * 100)}% of {mb(model.downloadBytes)}</p>
+    </div>
+  );
+  return model.installed ? (
+    <div className="flex items-center gap-3">
+      <span className="flex items-center gap-1.5 text-label text-success"><Check className="size-3.5" /> Installed · {mb(model.diskBytes)} on disk</span>
+      <button onClick={remove} className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-label text-muted-foreground transition hover:border-border-heavy hover:text-foreground">
+        <Trash2 className="size-3.5" /> Remove
+      </button>
+    </div>
+  ) : (
+    <button onClick={download} className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-label font-medium text-accent-foreground transition hover:opacity-90">
+      <Download className="size-4" /> Download Qwen3-ASR ({mb(model.downloadBytes)})
+    </button>
   );
 }
 

@@ -17,6 +17,8 @@ test("isJunk: silence artifacts dropped, real short answers kept", () => {
   assert.equal(isJunk("please subscribe"), true);
   assert.equal(isJunk("bye"), false);
   assert.equal(isJunk("DCEN"), false);        // a real short answer / term
+  assert.equal(isJunk("你好"), false);        // Chinese must not be stripped as junk
+  assert.equal(isJunk("我想练习英语"), false);
 });
 
 test("endsMidThought: trailing filler = keep listening; a complete clause = go", () => {

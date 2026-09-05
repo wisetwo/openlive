@@ -136,7 +136,9 @@ export class LiveClient {
   /** Bind this conversation to a coding agent (null = provider brain) + project folder.
    *  cwd ALWAYS travels (empty string = no folder) — the old omit-when-empty shape let
    *  a transiently-empty store silently strand the server on a stale/absent folder. */
-  bind(agentId: AgentId | null, cwd: string, resumeSessionId?: string) { this.sendJson({ t: "bind", agentId, cwd, ...(resumeSessionId ? { resumeSessionId } : {}) }); }
+  bind(agentId: AgentId | null, cwd: string, resumeSessionId?: string, kind?: "live" | "english-coach") {
+    this.sendJson({ t: "bind", agentId, cwd, ...(resumeSessionId ? { resumeSessionId } : {}), ...(kind ? { kind } : {}) });
+  }
   /** Answer an agent permission ask (chip tap or spoken yes/no). */
   permissionResponse(reqId: string, optionId: string) { this.sendJson({ t: "permission_response", reqId, optionId }); }
   /** Answer an agent elicitation (form submit / spoken "done" / cancel). */

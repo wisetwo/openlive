@@ -1,4 +1,5 @@
 import { streamProvider, isReasoningModel, type Message, type Effort } from "@openlive/harness";
+import { ENGLISH_COACH_PROMPT, englishCoachModelHistory, parseEnglishCoachResponse, suppressRedundantCoachCorrection } from "@openlive/shared";
 import { buildOpenLiveTools, type OpenLiveTool, type Emit } from "../tools.js";
 import { collectTurn, safeParseArgs } from "../turn.js";
 import { buildLivePrompt } from "../prompt.js";
@@ -29,12 +30,30 @@ const MAX_STEPS = 6;
 
 // A per-call LLM driver that keeps a growing Message[] across turns and injects the
 // camera frame(s) onto each user turn.
+export type LiveMode = "live" | "english-coach";
+
 export class LiveTurnRunner {
   private messages: Message[];
+  private mode: LiveMode;
 
-  constructor(private extraTools: OpenLiveTool[]) {
-    this.messages = [{ role: "system", text: buildLivePrompt() }];
+  constructor(private extraTools: OpenLiveTool[], mode: LiveMode = "live") {
+    this.mode = mode;
+    this.messages = [{ role: "system", text: this.systemPrompt() }];
   }
+
+  private systemPrompt(): string {
+    return this.mode === "english-coach" ? ENGLISH_COACH_PROMPT : buildLivePrompt();
+  }
+
+  /** Switch live vs English-coach without dropping conversation history. */
+  setMode(mode: LiveMode) {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    if (this.messages[0]?.role === "system") this.messages[0] = { role: "system", text: this.systemPrompt() };
+    else this.messages.unshift({ role: "system", text: this.systemPrompt() });
+  }
+
+  isCoach(): boolean { return this.mode === "english-coach"; }
 
   /** Seed prior conversation (text only) after the system prompt — used on
    *  reconnect so the agent doesn't forget what was already said in the call. */
@@ -51,7 +70,7 @@ export class LiveTurnRunner {
     try { resolved = resolveLive(); } catch { return; }
     const { provider, model, apiKey } = resolved;
     if (!model || (!apiKey && !provider.keyless)) return;
-    const tools = [...buildOpenLiveTools({ emit: async () => {} }), ...this.extraTools];
+    const tools = this.mode === "english-coach" ? [] : [...buildOpenLiveTools({ emit: async () => {} }), ...this.extraTools];
     const toolDefs = tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
     try {
       // maxTokens:1 — we only want the prefill (cache write); the output is discarded.
@@ -80,9 +99,10 @@ export class LiveTurnRunner {
     // be on). We do NOT gate on a hardcoded vision list: the frames go to whatever
     // model is picked, and if the provider genuinely can't take images it surfaces
     // a real error (never a faked "I can see"). Tell the model which source it is.
+    const coach = this.mode === "english-coach";
     let text = userText;
     let imgs: { data: string; mime: string }[] | undefined;
-    if (frames.length) {
+    if (!coach && frames.length) {
       const sources = [...new Set(frames.map((f) => f.source ?? "camera"))].join(" and ");
       // If the user configured a separate vision model, let IT see and fold its
       // description into this turn (so a text-only live model still works). Falls
@@ -107,7 +127,7 @@ export class LiveTurnRunner {
 
     // Build tools with THIS turn's emit + signal so their events are dropped by the
     // same epoch guard when a barge-in interrupts. `runWorker` powers `delegate`.
-    const tools = [...buildOpenLiveTools({ emit, signal, runWorker }), ...this.extraTools];
+    const tools = coach ? [] : [...buildOpenLiveTools({ emit, signal, runWorker }), ...this.extraTools];
     const toolDefs = tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
 
     // Live wants the SNAPPIEST conversation. Auto = thinking OFF for an instant
@@ -130,12 +150,14 @@ export class LiveTurnRunner {
         if (signal.aborted) return;
         partial = "";
         const turn = await collectTurn(
-          streamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, ...reasoning, maxTokens: 4096 }, signal),
+          streamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, ...reasoning, maxTokens: coach ? 800 : 4096 }, signal),
           track,
         );
         this.messages.push({
           role: "assistant",
-          text: turn.text,
+          text: coach
+            ? englishCoachModelHistory(suppressRedundantCoachCorrection(parseEnglishCoachResponse(turn.text), userText))
+            : turn.text,
           reasoning: turn.reasoning || undefined,
           reasoningSignature: turn.reasoningSignature,
           toolCalls: turn.toolCalls.length ? turn.toolCalls : undefined,

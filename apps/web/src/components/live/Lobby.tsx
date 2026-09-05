@@ -43,6 +43,7 @@ export function Lobby(props: LobbyProps) {
     downloadPct, downloadLoaded, downloadTotal, downloadModels, refreshDevices, onDownload, onStart, onOpenSettings, onExit } = props;
   const boundAgent = useLiveStore((s) => s.boundAgent);
   const boundCwd = useLiveStore((s) => s.boundCwd);
+  const sessionKind = useLiveStore((s) => s.sessionKind);
   const cpu = typeof navigator !== "undefined" && !hasWebGPU();
   // A project folder is REQUIRED only for a coding agent (its file-access scope + where
   // its session is filed). The built-in OpenLive assistant needs no folder — a folderless
@@ -178,7 +179,7 @@ export function Lobby(props: LobbyProps) {
 
           {/* project folder — front and center (it gates Start for a coding agent) */}
           <div className="w-full max-w-[22rem] text-left" data-tour="folder">
-            <WorkspaceField cwd={boundCwd} name={boundAgent ? agentLabel(boundAgent) : "OpenLive"} required={!!boundAgent} />
+            {sessionKind === "english-coach" ? null : <WorkspaceField cwd={boundCwd} name={boundAgent ? agentLabel(boundAgent) : "OpenLive"} required={!!boundAgent} />}
           </div>
 
           {cta}
@@ -207,7 +208,12 @@ export function Lobby(props: LobbyProps) {
               what makes "who" vs "how" two groups instead of one long list. */}
           <div className="h-px bg-border/60" />
 
-          {boundAgent ? <AgentSetup agent={boundAgent} /> : <ModelQuickPick onOpenSettings={onOpenSettings} />}
+          {boundAgent ? <AgentSetup agent={boundAgent} /> : sessionKind === "english-coach" ? (
+            <div className="space-y-6">
+              <p className="text-caption leading-relaxed text-muted-foreground">A spoken English lesson. Speak Chinese or English — the coach replies in English, with a natural phrasing when it helps. Interrupt anytime. Uses the built-in model below, not a coding agent.</p>
+              <ModelQuickPick onOpenSettings={onOpenSettings} />
+            </div>
+          ) : <ModelQuickPick onOpenSettings={onOpenSettings} />}
         </div>
       </aside>
 

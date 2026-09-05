@@ -7,19 +7,21 @@
 
 export type WhisperSize = "tiny" | "base" | "small" | "large-v3-turbo";
 export const WHISPER_SIZE_IDS: readonly WhisperSize[] = ["tiny", "base", "small", "large-v3-turbo"];
+export type SttEngine = "whisper" | "qwen3";
+export const STT_ENGINE_IDS: readonly SttEngine[] = ["whisper", "qwen3"];
 export type TurnEngine = "smart-turn" | "silence";
 export type TtsEngine = "kokoro" | "supertonic" | "clone";
 export const TTS_ENGINE_IDS: readonly TtsEngine[] = ["kokoro", "supertonic", "clone"];
 
 export interface PipelineConfig {
-  stt: { whisperSize: WhisperSize };                        // Whisper.en model size (applies on reload)
+  stt: { whisperSize: WhisperSize; engine: SttEngine }; // engine applies in English-coach sessions only
   tts: { engine: TtsEngine; voice: string; speed: number }; // TTS engine + voice id + speaking rate
   turn: { engine: TurnEngine; threshold: number; holdMs: number }; // Smart-Turn (semantic) vs silence timeout; sigmoid cutoff (0..1); max mid-thought hold before auto-send
   vad: { speechThreshold: number; redemptionMs: number };   // Silero sensitivity + trailing silence before a turn ends
 }
 
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
-  stt: { whisperSize: "base" },
+  stt: { whisperSize: "base", engine: "qwen3" },
   tts: { engine: "kokoro", voice: "af_heart", speed: 1 },
   turn: { engine: "smart-turn", threshold: 0.5, holdMs: 4000 },
   vad: { speechThreshold: 0.5, redemptionMs: 550 },
@@ -107,7 +109,7 @@ export function clampPipelineConfig(c: PipelineConfig): PipelineConfig {
   const engine = oneOf(c.tts.engine, TTS_ENGINE_IDS, d.tts.engine);
   const eng = engineOf(engine);
   return {
-    stt: { whisperSize: oneOf(c.stt.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize) },
+    stt: { whisperSize: oneOf(c.stt.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize), engine: oneOf(c.stt.engine, STT_ENGINE_IDS, d.stt.engine) },
     tts: {
       engine,
       // The voice must belong to the selected engine; a stale/foreign id falls
@@ -129,7 +131,7 @@ export function mergePipelineConfig(partial: unknown): PipelineConfig {
   const p = (partial ?? {}) as Partial<{ [K in keyof PipelineConfig]: Partial<PipelineConfig[K]> }>;
   const d = DEFAULT_PIPELINE_CONFIG;
   return clampPipelineConfig({
-    stt: { whisperSize: oneOf(p.stt?.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize) },
+    stt: { whisperSize: oneOf(p.stt?.whisperSize, WHISPER_SIZE_IDS, d.stt.whisperSize), engine: oneOf(p.stt?.engine, STT_ENGINE_IDS, d.stt.engine) },
     tts: { engine: oneOf(p.tts?.engine, TTS_ENGINE_IDS, d.tts.engine), voice: typeof p.tts?.voice === "string" ? p.tts.voice : d.tts.voice, speed: num(p.tts?.speed, d.tts.speed) },
     turn: { engine: oneOf(p.turn?.engine, ["smart-turn", "silence"], d.turn.engine), threshold: num(p.turn?.threshold, d.turn.threshold), holdMs: num(p.turn?.holdMs, d.turn.holdMs) },
     vad: { speechThreshold: num(p.vad?.speechThreshold, d.vad.speechThreshold), redemptionMs: num(p.vad?.redemptionMs, d.vad.redemptionMs) },

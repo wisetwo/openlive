@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AlertCircle, Brain, Check, ChevronRight, Copy, Download, ListTodo, Loader2, PanelRightClose } from "lucide-react";
 import { useChat, type ChatMsg, type Part } from "@/lib/chatStore";
+import type { EnglishCoachTurn } from "@openlive/shared";
 import { usePresence } from "@/lib/usePopIn";
 import { useLiveStore } from "@/lib/live/liveStore";
 import { kindMeta, toolMeta as meta } from "@/lib/live/toolMeta";
@@ -21,8 +22,8 @@ export function TranscriptPanel({ open, chatId, width, onResize, onClose }: {
   open: boolean; chatId: string; width: number; onResize: (w: number) => void; onClose: () => void;
 }) {
   const msgs = useChat(chatId);
-  const { userCaption, userPartial, todos } = useLiveStore(useShallow((s) => ({
-    userCaption: s.userCaption, userPartial: s.userPartial, todos: s.todos,
+  const { userCaption, userPartial, todos, sessionKind } = useLiveStore(useShallow((s) => ({
+    userCaption: s.userCaption, userPartial: s.userPartial, todos: s.todos, sessionKind: s.sessionKind,
   })));
   const scroller = useRef<HTMLDivElement>(null);
   const asideRef = useRef<HTMLElement>(null);
@@ -72,7 +73,7 @@ export function TranscriptPanel({ open, chatId, width, onResize, onClose }: {
       {/* overflow-anchor off: we pin to the bottom ourselves; browser scroll
           anchoring fights content-visibility height estimates. */}
       <div ref={scroller} className="openlive-scroll flex-1 space-y-5 overflow-y-auto p-4 [overflow-anchor:none]">
-        {empty && <p className="mt-8 text-center text-label text-faint">Your conversation will appear here.</p>}
+        {empty && <p className="mt-8 text-center text-label text-faint">{sessionKind === "english-coach" ? "Speak — in English or Chinese. The coach will reply in English." : "Your conversation will appear here."}</p>}
         {msgs.map((m, i) => (
           <Message key={m.id} msg={m} streaming={m.role === "assistant" && !m.done && i === msgs.length - 1} />
         ))}
@@ -121,6 +122,14 @@ function exportTranscript(msgs: ChatMsg[]) {
   const lines: string[] = [];
   for (const m of msgs) {
     if (m.role === "user") { lines.push(`**You:** ${m.text ?? ""}`, ""); continue; }
+    if (m.coach) {
+      const bits = [];
+      if (m.coach.natural) bits.push(`**Natural English:** ${m.coach.natural}`);
+      if (m.coach.feedback) bits.push(`**Coach's note:** ${m.coach.feedback}`);
+      if (m.coach.reply) bits.push(`**Reply:** ${m.coach.reply}`);
+      if (bits.length) lines.push(`**Coach:**`, bits.join("\n\n"), "");
+      continue;
+    }
     const body = m.parts.filter((p) => p.kind === "text").map((p) => (p as { text: string }).text).join("\n").trim();
     const tools = m.parts.filter((p): p is Extract<Part, { kind: "tool" } | { kind: "acp_tool" }> => p.kind === "tool" || p.kind === "acp_tool");
     if (tools.length) lines.push(tools.map((t) => t.kind === "tool"
@@ -183,6 +192,31 @@ const MarkdownText = memo(function MarkdownText({ text, muted }: { text: string;
   );
 });
 
+function CoachCard({ turn }: { turn: EnglishCoachTurn }) {
+  return (
+    <div className="space-y-2 rounded-xl bg-card/50 p-3 shadow-[var(--shadow-xs)]">
+      {turn.natural && (
+        <div>
+          <p className="text-micro font-medium uppercase tracking-wide text-faint">Natural English</p>
+          <p className="text-body leading-relaxed text-foreground">{turn.natural}</p>
+        </div>
+      )}
+      {turn.feedback && (
+        <div>
+          <p className="text-micro font-medium uppercase tracking-wide text-faint">Coach&apos;s note</p>
+          <p className="text-label leading-relaxed text-muted-foreground">{turn.feedback}</p>
+        </div>
+      )}
+      {turn.reply && (
+        <div>
+          <p className="text-micro font-medium uppercase tracking-wide text-faint">Reply</p>
+          <p className="text-body leading-relaxed text-foreground">{turn.reply}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Memoized: during the word-by-word voice reveal only ONE message object changes
 // per frame (chatStore preserves identities), so the rest skip re-render.
 const Message = memo(function Message({ msg, streaming }: { msg: ChatMsg; streaming: boolean }) {
@@ -190,6 +224,15 @@ const Message = memo(function Message({ msg, streaming }: { msg: ChatMsg; stream
     return (
       <div className="flex justify-end">
         <div className="ol-selectable max-w-[85%] rounded-2xl bg-accent px-3 py-1.5 text-body leading-relaxed text-accent-foreground">{msg.text}</div>
+      </div>
+    );
+  }
+
+  if (msg.coach && (msg.coach.natural || msg.coach.feedback || msg.coach.reply || streaming)) {
+    return (
+      <div className="ol-cv group/msg flex flex-col gap-2">
+        {streaming && !msg.coach.natural && !msg.coach.feedback && !msg.coach.reply && <span className="arc-shimmer text-body font-medium">Thinking…</span>}
+        <CoachCard turn={msg.coach} />
       </div>
     );
   }

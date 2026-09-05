@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { mergeToolCall, type SseEvent, type ToolCallState } from "@openlive/shared";
+import { coachTurnFromText, type EnglishCoachTurn } from "@openlive/shared";
 
 // Minimal transcript store for the live call. useLiveSession drives it
 // imperatively (liveUserTurn / liveText / liveReason / liveEvent / liveFinish);
@@ -23,6 +24,7 @@ export interface ChatMsg {
   role: "user" | "assistant";
   text: string;   // user turns only
   parts: Part[];  // assistant turns only
+  coach?: EnglishCoachTurn;
   done: boolean;
 }
 
@@ -109,6 +111,9 @@ export const chatStore = {
       patch(chatId, id, (m) => upsertAcpTool(m, e.delta.id, (prev) => mergeToolCall(prev, e.delta)));
     }
   },
+  liveCoach(chatId: string, id: string, turn: EnglishCoachTurn) {
+    patch(chatId, id, (m) => (m.coach === turn ? m : { ...m, coach: turn }));
+  },
   liveFinish(chatId: string, id: string) {
     patch(chatId, id, (m) =>
       m.done ? m : {
@@ -146,7 +151,10 @@ export const chatStore = {
           parts.push({ kind: "acp_tool", call: b.call });
         }
       }
-      if (parts.length) msgs.push({ id: m.id, role: "assistant", text: "", parts, done: true });
+      if (parts.length) {
+        const body = parts.filter((p): p is Extract<Part, { kind: "text" }> => p.kind === "text").map((p) => p.text).join("");
+        msgs.push({ id: m.id, role: "assistant", text: "", parts, done: true, coach: coachTurnFromText(body) ?? undefined });
+      }
     }
     useChatState.getState()._set(chatId, () => msgs);
   },

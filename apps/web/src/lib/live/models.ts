@@ -4,6 +4,7 @@
 // worker is kept warm for the whole tab (never torn down between calls) — so opening
 // Live a second time reuses the loaded pipelines with zero download and no shader recompile.
 import { loadPipelineConfig } from "./pipelineConfig";
+import { shouldRetryCoachTranscription } from "@openlive/shared";
 
 export type ModelKey = "stt" | "tts" | "turn";
 export type ModelProgress = { key: ModelKey; name: string; loaded: number; total: number };
@@ -190,6 +191,46 @@ function call<T>(msg: any, transfer?: Transferable[]): Promise<T> {
 export async function stt(audio: Float32Array): Promise<string> {
   const m = await call<{ text: string }>({ type: "stt", audio });
   return m.text;
+}
+
+function floatToInt16Base64(audio: Float32Array): string {
+  const pcm = new Int16Array(audio.length);
+  for (let i = 0; i < audio.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(audio[i]! * 32767)));
+  const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** Local Qwen3-ASR via the agent service. Returns null if the model isn't installed. */
+export async function qwenAsr(audio: Float32Array, sampleRate = 16000): Promise<string | null> {
+  const res = await fetch("/api/voice/asr/transcribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sampleRate, pcmBase64: floatToInt16Base64(audio) }),
+  });
+  if (res.status === 409) return null;
+  if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
+  const j = await res.json() as { text?: string };
+  return String(j.text ?? "").trim();
+}
+
+/** Final utterance transcript. Coach sessions may use Qwen3-ASR, then retry Whisper.en on a suspicious script. */
+export async function transcribeFinal(audio: Float32Array, coach: boolean): Promise<string> {
+  const cfg = loadPipelineConfig();
+  let text = "";
+  if (coach && cfg.stt.engine === "qwen3") {
+    try {
+      const q = await qwenAsr(audio);
+      if (q) text = q;
+    } catch { /* fall through to Whisper */ }
+  }
+  if (!text) text = (await stt(audio)).trim();
+  if (coach && shouldRetryCoachTranscription(text, true)) {
+    const en = (await stt(audio)).trim();
+    if (en) text = en;
+  }
+  return text;
 }
 
 // Cloned-voice synthesis runs in the LOCAL agent service (ZipVoice via

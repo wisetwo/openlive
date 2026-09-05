@@ -120,7 +120,7 @@ export const liveClientMsgSchema = z.discriminatedUnion("t", [
   // Bind (or unbind) this conversation to a coding agent + set its project folder.
   // Sent on connect (from the client's remembered choice) and whenever the user
   // switches agents OR the project folder. null agentId = the built-in provider brain.
-  z.object({ t: z.literal("bind"), agentId: AGENT_ID.nullable(), cwd: z.string().optional(), resumeSessionId: z.string().optional() }),
+  z.object({ t: z.literal("bind"), agentId: AGENT_ID.nullable(), cwd: z.string().optional(), resumeSessionId: z.string().optional(), kind: z.enum(["live", "english-coach"]).optional() }),
   // The user's answer to a permission request (chip tap or a spoken yes/no).
   z.object({ t: z.literal("permission_response"), reqId: z.string(), optionId: z.string() }),
   // The user's answer to an elicitation (form submit / "done" / cancel).

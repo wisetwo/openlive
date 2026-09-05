@@ -8,6 +8,7 @@ import { extract } from "tar";
 import unbzip2 from "unbzip2-stream";
 import { listVoiceProfiles, createVoiceProfile, deleteVoiceProfile, renameVoiceProfile } from "@openlive/db";
 import { modelInstalled, modelDiskBytes, synthesize, unloadEngine, VOICE_MODEL_DIR, VOICE_PROFILE_DIR } from "./engine.js";
+import { asrModelInstalled, asrModelDiskBytes, transcribePcm, unloadAsrEngine, ASR_MODEL_DIR, ASR_TAR_URL, ASR_DOWNLOAD_BYTES } from "./asr.js";
 import { log } from "../log.js";
 
 // Voice Studio REST surface, mounted at /voice (behind the same shared-secret
@@ -174,6 +175,77 @@ voiceRoutes.post("/tts", async (c) => {
     });
   } catch (e) {
     log.error("voice", "tts:", e);
+    return c.json({ error: String((e as Error)?.message ?? e) }, 500);
+  }
+});
+
+let asrDownloading = false;
+
+voiceRoutes.get("/asr", (c) =>
+  c.json({ installed: asrModelInstalled(), downloading: asrDownloading, downloadBytes: ASR_DOWNLOAD_BYTES, diskBytes: asrModelDiskBytes() }));
+
+voiceRoutes.post("/asr/download", (c) => {
+  if (asrDownloading) return c.json({ error: "already downloading" }, 409);
+  if (asrModelInstalled()) return c.json({ error: "already downloaded" }, 409);
+  asrDownloading = true;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const enc = new TextEncoder();
+      let loaded = 0;
+      let lastPush = 0;
+      const progress = (n: number) => {
+        loaded += n;
+        if (Date.now() - lastPush > 200) {
+          lastPush = Date.now();
+          try { controller.enqueue(enc.encode(JSON.stringify({ loaded, total: ASR_DOWNLOAD_BYTES }) + "\n")); } catch { /* client gone */ }
+        }
+      };
+      const counted = () => new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, ctrl) { progress(chunk.byteLength); ctrl.enqueue(chunk); } });
+      try {
+        mkdirSync(ASR_MODEL_DIR, { recursive: true });
+        const tarRes = await fetch(ASR_TAR_URL, { redirect: "follow" });
+        if (!tarRes.ok || !tarRes.body) throw new Error(`asr download HTTP ${tarRes.status}`);
+        await pipeline(
+          Readable.fromWeb(tarRes.body.pipeThrough(counted()) as never),
+          unbzip2(),
+          extract({ cwd: ASR_MODEL_DIR, strip: 1 }),
+        );
+        if (!asrModelInstalled()) throw new Error("asr model files missing after extract");
+        controller.enqueue(enc.encode(JSON.stringify({ loaded: ASR_DOWNLOAD_BYTES, total: ASR_DOWNLOAD_BYTES, done: true }) + "\n"));
+      } catch (e) {
+        log.error("asr", "model download:", e);
+        rmSync(ASR_MODEL_DIR, { recursive: true, force: true });
+        try { controller.enqueue(enc.encode(JSON.stringify({ error: String((e as Error)?.message ?? e) }) + "\n")); } catch { /* closed */ }
+      } finally {
+        asrDownloading = false;
+        try { controller.close(); } catch { /* closed */ }
+      }
+    },
+  });
+  return new Response(stream, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache" } });
+});
+
+voiceRoutes.delete("/asr", (c) => {
+  unloadAsrEngine();
+  rmSync(ASR_MODEL_DIR, { recursive: true, force: true });
+  return c.json({ ok: true });
+});
+
+voiceRoutes.post("/asr/transcribe", async (c) => {
+  const body = await c.req.json().catch(() => null) as { sampleRate?: number; pcmBase64?: string } | null;
+  if (!asrModelInstalled()) return c.json({ error: "model-not-installed" }, 409);
+  const rate = Number(body?.sampleRate);
+  if (!body?.pcmBase64 || !Number.isFinite(rate) || rate < 8000) return c.json({ error: "sampleRate and pcmBase64 required" }, 400);
+  const raw = Buffer.from(body.pcmBase64, "base64");
+  if (raw.length < 2 || raw.length > 20_000_000) return c.json({ error: "audio too short or too long" }, 400);
+  const samples = new Float32Array(raw.length / 2);
+  for (let i = 0; i < samples.length; i++) samples[i] = raw.readInt16LE(i * 2) / 32768;
+  try {
+    const text = await transcribePcm(samples, rate);
+    return c.json({ text });
+  } catch (e) {
+    log.error("asr", "transcribe:", e);
     return c.json({ error: String((e as Error)?.message ?? e) }, 500);
   }
 });

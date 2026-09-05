@@ -1,10 +1,10 @@
 import { MicVAD } from "@ricky0123/vad-web";
 import { AudioPlayer } from "./audioPlayback";
-import { stt, tts, hasWebGPU, turnComplete, turnModelReady } from "./models";
+import { stt, tts, hasWebGPU, turnComplete, turnModelReady, transcribeFinal } from "./models";
 import { isJunk, endsMidThought, stripMarkdown, SentenceChunker } from "./voiceText";
 import { octaveBands } from "./spectrum";
 import { perf } from "./perf";
-import { loadPipelineConfig } from "./pipelineConfig";
+import { loadPipelineConfig, TURN_PRESETS, type PipelineConfig } from "./pipelineConfig";
 import { log } from "@/lib/log";
 
 // The on-device conversation loop (replaces the old server pipeline). Silero VAD
@@ -77,13 +77,20 @@ export class VoiceEngine {
 
   // Accept a pre-primed player so audio can be unlocked DURING the Start click
   // (iOS blocks audio started after an await — see useLiveSession.start).
-  constructor(private h: VoiceEngineHandlers, player?: AudioPlayer) { this.player = player ?? new AudioPlayer(); }
+  constructor(private h: VoiceEngineHandlers, player?: AudioPlayer, private coach = false) { this.player = player ?? new AudioPlayer(); }
+
+  private pipeline(): PipelineConfig {
+    const c = loadPipelineConfig();
+    if (!this.coach) return c;
+    const r = TURN_PRESETS.find((p) => p.id === "relaxed")!.values;
+    return { ...c, vad: { ...c.vad, redemptionMs: r.redemptionMs }, turn: { ...c.turn, threshold: r.threshold, holdMs: r.holdMs } };
+  }
 
   async start(stream: MediaStream) {
     this.player.resume();
     // VAD sensitivity + trailing silence come from the user's pipeline config;
     // baked into MicVAD at construction, so edits apply on the next start().
-    const vadCfg = loadPipelineConfig().vad;
+    const vadCfg = this.pipeline().vad;
     this.vad = await MicVAD.new({
       model: "v5",
       // Silero worklet + onnx + ort wasm are vendored into /public/vad by
@@ -230,12 +237,12 @@ export class VoiceEngine {
       // turn model isn't loaded, fall back to the VAD's silence endpointing.
       // "silence" turn engine skips Smart-Turn entirely and lets the VAD's trailing
       // silence (redemptionMs) end the turn; "smart-turn" uses the semantic model.
-      const turnCfg = loadPipelineConfig().turn;
+      const turnCfg = this.pipeline().turn;
       // While push-to-talk is held, no end-of-turn decision at all: just accumulate
       // and caption — release (endPtt) is the one and only turn boundary.
       const useTurnModel = !this.ptt && turnModelReady() && turnCfg.engine !== "silence";
       const [text, modelComplete] = await Promise.all([
-        stt(combined).then((t) => t.trim()),
+        transcribeFinal(combined, this.coach).then((t) => t.trim()),
         useTurnModel ? turnComplete(combined, turnCfg.threshold) : Promise.resolve(true),
       ]);
       const sttEndpointMs = performance.now() - perf0;
@@ -281,7 +288,7 @@ export class VoiceEngine {
 
   private scheduleHold() {
     this.clearHold();
-    const holdMs = loadPipelineConfig().turn.holdMs;
+    const holdMs = this.pipeline().turn.holdMs;
     this.holdTimer = setTimeout(() => this.flushPending(), holdMs);
     this.h.onHold({ until: Date.now() + holdMs });
   }
@@ -302,7 +309,7 @@ export class VoiceEngine {
     // the auto-send path was paying for a second transcription. Fall back to STT
     // only if for some reason we don't have the cached text.
     if (cached) commit(cached);
-    else void stt(p).then(commit).catch(() => this.h.onPartial("")); // stalled/failed STT → don't strand the caption
+    else void transcribeFinal(p, this.coach).then(commit).catch(() => this.h.onPartial("")); // stalled/failed STT → don't strand the caption
   }
   /** Public "send now": commit a held utterance without waiting for the hold timer. */
   commitPending() { if (this.pending && !this.ptt) this.flushPending(); }
@@ -332,7 +339,7 @@ export class VoiceEngine {
     this.pending = null;
     if (!p || p.length < MIN_UTTER_SAMPLES) { this.h.onPartial(""); if (this.phase === "listening") this.setPhase("idle"); return; }
     try {
-      const text = (await stt(p)).trim();
+      const text = (await transcribeFinal(p, this.coach)).trim();
       if (isJunk(text)) { this.h.onPartial(""); this.setPhase("idle"); return; }
       this.setPhase("thinking");
       this.spokenText = "";
@@ -348,6 +355,12 @@ export class VoiceEngine {
     if (!this.acceptingReply) return; // interrupted reply's straggler deltas — don't voice them
     perf.firstToken(); // no-op after the first delta of a turn
     for (const s of this.chunker.push(text)) this.enqueueSpeak(s, this.epoch);
+  }
+  /** Speak a complete line without the sentence chunker (coach "Try:" cue). */
+  speakLine(text: string) {
+    if (!this.acceptingReply) return;
+    perf.firstToken();
+    this.enqueueSpeak(text, this.epoch);
   }
   endAgentTurn() {
     if (!this.acceptingReply) return; // the barged reply's `done` — no tail to flush/voice
