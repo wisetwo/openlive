@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -8,7 +8,7 @@ import { extract } from "tar";
 import unbzip2 from "unbzip2-stream";
 import { listVoiceProfiles, createVoiceProfile, deleteVoiceProfile, renameVoiceProfile } from "@openlive/db";
 import { modelInstalled, modelDiskBytes, synthesize, unloadEngine, VOICE_MODEL_DIR, VOICE_PROFILE_DIR } from "./engine.js";
-import { asrModelInstalled, asrModelDiskBytes, transcribePcm, unloadAsrEngine, ASR_MODEL_DIR, ASR_TAR_URL, ASR_DOWNLOAD_BYTES } from "./asr.js";
+import { asrModelInstalled, asrModelDiskBytes, transcribePcm, unloadAsrEngine, ASR_MODEL_DIR, ASR_FILES, ASR_MODELSCOPE_ROOT, ASR_DOWNLOAD_BYTES } from "./asr.js";
 import { log } from "../log.js";
 
 // Voice Studio REST surface, mounted at /voice (behind the same shared-secret
@@ -181,6 +181,10 @@ voiceRoutes.post("/tts", async (c) => {
 
 let asrDownloading = false;
 
+function asrFileReady(path: string, bytes: number): boolean {
+  try { return statSync(path).size >= bytes; } catch { return false; }
+}
+
 voiceRoutes.get("/asr", (c) =>
   c.json({ installed: asrModelInstalled(), downloading: asrDownloading, downloadBytes: ASR_DOWNLOAD_BYTES, diskBytes: asrModelDiskBytes() }));
 
@@ -203,15 +207,19 @@ voiceRoutes.post("/asr/download", (c) => {
       };
       const counted = () => new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, ctrl) { progress(chunk.byteLength); ctrl.enqueue(chunk); } });
       try {
-        mkdirSync(ASR_MODEL_DIR, { recursive: true });
-        const tarRes = await fetch(ASR_TAR_URL, { redirect: "follow" });
-        if (!tarRes.ok || !tarRes.body) throw new Error(`asr download HTTP ${tarRes.status}`);
-        await pipeline(
-          Readable.fromWeb(tarRes.body.pipeThrough(counted()) as never),
-          unbzip2(),
-          extract({ cwd: ASR_MODEL_DIR, strip: 1 }),
-        );
-        if (!asrModelInstalled()) throw new Error("asr model files missing after extract");
+        mkdirSync(join(ASR_MODEL_DIR, "tokenizer"), { recursive: true });
+        for (const f of ASR_FILES) {
+          const dest = join(ASR_MODEL_DIR, f.local);
+          if (existsSync(dest) && asrFileReady(dest, f.bytes)) { progress(f.bytes); continue; }
+          const url = `${ASR_MODELSCOPE_ROOT}/${f.remote}`;
+          const res = await fetch(url, { redirect: "follow", headers: { "user-agent": "OpenLive" } });
+          if (!res.ok || !res.body) throw new Error(`asr download HTTP ${res.status} (${f.remote})`);
+          const part = `${dest}.part`;
+          await pipeline(Readable.fromWeb(res.body.pipeThrough(counted()) as never), createWriteStream(part));
+          renameSync(part, dest);
+          if (!asrFileReady(dest, f.bytes)) throw new Error(`asr file truncated: ${f.local}`);
+        }
+        if (!asrModelInstalled()) throw new Error("asr model files missing after download");
         controller.enqueue(enc.encode(JSON.stringify({ loaded: ASR_DOWNLOAD_BYTES, total: ASR_DOWNLOAD_BYTES, done: true }) + "\n"));
       } catch (e) {
         log.error("asr", "model download:", e);

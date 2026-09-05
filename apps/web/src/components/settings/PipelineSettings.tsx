@@ -132,7 +132,7 @@ function SttStage({ cfg, update }: { cfg: PipelineConfig; update: Update }) {
       {cfg.stt.whisperSize === "large-v3-turbo" && <p className="-mt-2 text-caption text-faint">A big download and a real GPU-memory footprint — expect the best transcription, but drop back to Small if your machine struggles.</p>}
       <ModelStatus removeKind="whisper" />
 
-      <StageHead title="English coach recognition" desc="Only used in English Coach sessions. Qwen3-ASR 0.6B INT8 runs in the local agent (same stack as Clone Voice). About 800 MB compressed — removable anytime." />
+      <StageHead title="English coach recognition" desc="Only used in English Coach sessions. Qwen3-ASR 0.6B INT8 is downloaded from ModelScope into the local agent (same stack as Clone Voice). About 1 GB — removable anytime." />
       <label className="flex flex-col gap-1.5">
         <span className="text-label text-foreground">Coach engine</span>
         <select value={cfg.stt.engine} onChange={(e) => update({ ...cfg, stt: { ...cfg.stt, engine: e.target.value as PipelineConfig["stt"]["engine"] } })} className={selectClass}>

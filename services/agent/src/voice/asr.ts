@@ -9,10 +9,19 @@ import { log } from "../log.js";
 // boots without the native module if coach mode is never used.
 
 export const ASR_MODEL_DIR = resolve(DATA_DIR, "models", "qwen3-asr");
-export const ASR_TAR_URL =
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2";
-// Published archive size (compressed). Progress UI uses this as the denominator.
-export const ASR_DOWNLOAD_BYTES = 812_000_000;
+// Same 0.6B INT8 export sherpa-onnx documents. ModelScope is the China-reachable
+// source; files land flattened next to tokenizer/ (the GitHub tarball layout).
+export const ASR_MODELSCOPE_ROOT =
+  "https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/resolve/master";
+export const ASR_FILES = [
+  { remote: "model_0.6B/conv_frontend.onnx", local: "conv_frontend.onnx", bytes: 44_148_281 },
+  { remote: "model_0.6B/encoder.int8.onnx", local: "encoder.int8.onnx", bytes: 182_491_662 },
+  { remote: "model_0.6B/decoder.int8.onnx", local: "decoder.int8.onnx", bytes: 755_914_231 },
+  { remote: "tokenizer/vocab.json", local: "tokenizer/vocab.json", bytes: 2_776_833 },
+  { remote: "tokenizer/merges.txt", local: "tokenizer/merges.txt", bytes: 1_671_853 },
+  { remote: "tokenizer/tokenizer_config.json", local: "tokenizer/tokenizer_config.json", bytes: 12_487 },
+] as const;
+export const ASR_DOWNLOAD_BYTES = ASR_FILES.reduce((n, f) => n + f.bytes, 0);
 
 const MODEL_FILES = ["conv_frontend.onnx", "encoder.int8.onnx", "decoder.int8.onnx"];
 const IDLE_UNLOAD_MS = 5 * 60_000;
