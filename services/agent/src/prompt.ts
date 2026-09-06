@@ -1,6 +1,7 @@
 // Identity + spoken-conversation rules for the OpenLive voice agent. This is a
 // general voice+vision assistant — no product manuals, no canvas.
 import { getSetting } from "@openlive/db";
+import { ENGLISH_COACH_PROMPT } from "@openlive/shared";
 
 export const PERSONA = `You are OpenLive, a capable, easygoing assistant — good at explaining things, reasoning, and handling whatever comes up. Talk like a real, helpful person, not a chatbot.
 
@@ -51,21 +52,43 @@ export const WORKER_PROMPT = `You are OpenLive's research assistant. You do NOT 
 - Return only the findings — a few plain sentences with the key facts, and any number, date, or name that matters (a source name if it helps). No preamble, no "I found", no markdown, no lists.
 - If the tools turned up nothing useful, say so plainly in one line.`;
 
+function rememberedNotesBlock(): string {
+  try {
+    const arr = JSON.parse(getSetting("agent_notes") ?? "[]") as string[];
+    if (arr.length) {
+      return `\n\n---\nWHAT YOU REMEMBER ABOUT THIS USER (saved earlier — use naturally, don't recite):\n${arr.map((n) => `- ${n}`).join("\n")}`;
+    }
+  } catch { /* no notes */ }
+  return "";
+}
+
+function todayClock(): string {
+  const date = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  return `\n\n---\nRIGHT NOW IT IS ${date}. That is the real current date — use it, never guess or default to your training date. For anything that changes over time (news, weather, prices, scores, "latest"/"current"/"today"), the date alone isn't enough — delegate to look it up.`;
+}
+
+const COACH_TOOLS = `---
+TOOLS
+Most turns need no tools. Use one only when it clearly helps the lesson. If you use a tool, call it FIRST, then output the NATURAL / FEEDBACK / REPLY tags — never mix tool calls into that tagged reply, and never say tool names, URLs, or raw lookup text aloud.
+- \`look\` — grab a closer camera/screen frame when they are sharing and you need to talk about what they are showing.
+- \`delegate\` — look up a word, an example sentence, or a current fact you should not guess.
+- \`remember\` — save one lasting fact about this learner (name, level, goal). Use rarely.`;
+
 /** Slim, spoken-conversation system prompt for live voice mode. Injects the real
  *  current date (so the agent never guesses "the date") and appends any facts the
  *  user asked to be remembered (the `remember` tool) so they persist. */
 export function buildLivePrompt(): string {
-  const now = new Date();
-  const date = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-  const clock = `\n\n---\nRIGHT NOW IT IS ${date}. That is the real current date — use it, never guess or default to your training date. For anything that changes over time (news, weather, prices, scores, "latest"/"current"/"today"), the date alone isn't enough — delegate to look it up.`;
-  let notes = "";
-  try {
-    const arr = JSON.parse(getSetting("agent_notes") ?? "[]") as string[];
-    if (arr.length) notes = `\n\n---\nWHAT YOU REMEMBER ABOUT THIS USER (saved earlier — use naturally, don't recite):\n${arr.map((n) => `- ${n}`).join("\n")}`;
-  } catch { /* no notes */ }
+  const clock = todayClock();
+  const notes = rememberedNotesBlock();
   // The user's own instructions from Settings → General (same text every ACP
   // agent receives via its session preamble). Read per session build.
   const custom = getSetting("customInstructions")?.trim().slice(0, 2000);
   const persona = custom ? `\n\n---\nHOW THE USER WANTS YOU TO BEHAVE AND SPEAK (their own words — follow within reason):\n${custom}` : "";
   return `${PERSONA}\n\n${LIVE_RULES}${clock}${notes}${persona}`;
+}
+
+/** English-coach system prompt: same XML contract, plus memory, date, and a
+ *  small tool set (lookup / look / remember). */
+export function buildEnglishCoachPrompt(): string {
+  return `${ENGLISH_COACH_PROMPT}\n\n${todayClock()}${rememberedNotesBlock()}\n\n${COACH_TOOLS}`;
 }

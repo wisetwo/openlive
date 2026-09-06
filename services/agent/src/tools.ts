@@ -224,3 +224,23 @@ export function buildWorkerTools(ctx: { emit: Emit }): OpenLiveTool[] {
 export function buildOpenLiveTools(ctx: { emit: Emit; signal?: AbortSignal; runWorker?: RunWorker }): OpenLiveTool[] {
   return [makeDelegate(ctx.emit, ctx.signal, ctx.runWorker), makeUpdateTodos(ctx.emit), makeRemember(ctx.emit)];
 }
+
+/** Spoken English coach: lookup + memory + (session-injected) `look`.
+ *  File / clipboard / URL / checklist tools stay off — they fight a hands-free lesson. */
+export function buildCoachTools(ctx: { emit: Emit; signal?: AbortSignal; runWorker?: RunWorker }): OpenLiveTool[] {
+  return [makeDelegate(ctx.emit, ctx.signal, ctx.runWorker), makeRemember(ctx.emit)];
+}
+
+const COACH_SESSION_TOOLS = new Set(["look"]);
+
+/** Built-in brain tool list for a live vs English-coach turn. */
+export function toolsForLiveMode(
+  mode: "live" | "english-coach",
+  extra: OpenLiveTool[],
+  ctx: { emit: Emit; signal?: AbortSignal; runWorker?: RunWorker },
+): OpenLiveTool[] {
+  if (mode === "english-coach") {
+    return [...buildCoachTools(ctx), ...extra.filter((t) => COACH_SESSION_TOOLS.has(t.name))];
+  }
+  return [...buildOpenLiveTools(ctx), ...extra];
+}

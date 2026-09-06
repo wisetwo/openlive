@@ -1,8 +1,8 @@
 import { isReasoningModel, type Message, type Effort } from "@openlive/harness";
-import { ENGLISH_COACH_PROMPT, englishCoachModelHistory, parseEnglishCoachResponse, suppressRedundantCoachCorrection } from "@openlive/shared";
-import { buildOpenLiveTools, type OpenLiveTool, type Emit } from "../tools.js";
+import { englishCoachModelHistory, parseEnglishCoachResponse, suppressRedundantCoachCorrection } from "@openlive/shared";
+import { toolsForLiveMode, type OpenLiveTool, type Emit, type RunWorker } from "../tools.js";
 import { collectTurn, safeParseArgs } from "../turn.js";
-import { buildLivePrompt } from "../prompt.js";
+import { buildEnglishCoachPrompt, buildLivePrompt } from "../prompt.js";
 import { resolveLive, resolveVision, chatThinking, type ResolvedLive } from "../providers.js";
 import { tracedStreamProvider } from "../prompt-trace.js";
 import { runWorker } from "./worker.js";
@@ -43,7 +43,7 @@ export class LiveTurnRunner {
   }
 
   private systemPrompt(): string {
-    return this.mode === "english-coach" ? ENGLISH_COACH_PROMPT : buildLivePrompt();
+    return this.mode === "english-coach" ? buildEnglishCoachPrompt() : buildLivePrompt();
   }
 
   /** Switch live vs English-coach without dropping conversation history. */
@@ -71,7 +71,7 @@ export class LiveTurnRunner {
     try { resolved = resolveLive(); } catch { return; }
     const { provider, model, apiKey } = resolved;
     if (!model || (!apiKey && !provider.keyless)) return;
-    const tools = this.mode === "english-coach" ? [] : [...buildOpenLiveTools({ emit: async () => {} }), ...this.extraTools];
+    const tools = toolsForLiveMode(this.mode, this.extraTools, { emit: async () => {} });
     const toolDefs = tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
     try {
       // maxTokens:1 — we only want the prefill (cache write); the output is discarded.
@@ -103,7 +103,7 @@ export class LiveTurnRunner {
     const coach = this.mode === "english-coach";
     let text = userText;
     let imgs: { data: string; mime: string }[] | undefined;
-    if (!coach && frames.length) {
+    if (frames.length) {
       const sources = [...new Set(frames.map((f) => f.source ?? "camera"))].join(" and ");
       // If the user configured a separate vision model, let IT see and fold its
       // description into this turn (so a text-only live model still works). Falls
@@ -128,7 +128,15 @@ export class LiveTurnRunner {
 
     // Build tools with THIS turn's emit + signal so their events are dropped by the
     // same epoch guard when a barge-in interrupts. `runWorker` powers `delegate`.
-    const tools = coach ? [] : [...buildOpenLiveTools({ emit, signal, runWorker }), ...this.extraTools];
+    // Coach: worker status lines ride `say` so they don't break the XML reply.
+    const worker: RunWorker = (task, em, sig) => runWorker(
+      task,
+      coach
+        ? (e) => (e.type === "text_delta" ? em({ type: "say", text: e.text }) : em(e))
+        : em,
+      sig,
+    );
+    const tools = toolsForLiveMode(this.mode, this.extraTools, { emit, signal, runWorker: worker });
     const toolDefs = tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
 
     // Live wants the SNAPPIEST conversation. Auto = thinking OFF for an instant

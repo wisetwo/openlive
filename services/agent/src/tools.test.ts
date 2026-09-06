@@ -2,7 +2,7 @@
 // security/correctness paths where a silent miss is exploitable or corrupting.
 import assert from "node:assert";
 import { test } from "vitest";
-import { isPrivateIp, htmlToText } from "./tools.ts";
+import { isPrivateIp, htmlToText, toolsForLiveMode, type OpenLiveTool } from "./tools.ts";
 
 test("isPrivateIp: blocks loopback/private incl. IPv4-mapped IPv6", () => {
   // Private / loopback / metadata — must all be blocked.
@@ -26,3 +26,17 @@ test("htmlToText: astral codepoints survive, entities decode once", () => {
   assert.equal(htmlToText("a &amp;lt; b"), "a &lt; b");          // &amp; decoded last (no double-decode)
   assert.equal(htmlToText("<b>x</b> &amp; <i>y</i>"), "x & y");
 });
+
+test("toolsForLiveMode: coach gets look/delegate/remember, not files or clipboard", () => {
+  const stub = (name: string): OpenLiveTool => ({
+    name, description: name, parameters: { type: "object", properties: {} }, execute: async () => ({ output: "" }),
+  });
+  const extra = ["look", "clipboard_read", "clipboard_write", "open_url", "list_dir", "read_file", "write_file", "edit_file"].map(stub);
+  const ctx = { emit: async () => {} };
+  assert.deepEqual(toolsForLiveMode("english-coach", extra, ctx).map((t) => t.name).sort(), ["delegate", "look", "remember"]);
+  const live = toolsForLiveMode("live", extra, ctx).map((t) => t.name);
+  assert.ok(live.includes("update_todos"));
+  assert.ok(live.includes("open_url"));
+  assert.ok(live.includes("write_file"));
+});
+
