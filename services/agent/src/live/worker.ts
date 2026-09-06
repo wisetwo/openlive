@@ -1,8 +1,9 @@
-import { streamProvider, isReasoningModel, type Message } from "@openlive/harness";
+import { isReasoningModel, type Message } from "@openlive/harness";
 import { buildWorkerTools, type Emit } from "../tools.js";
 import { collectTurn, safeParseArgs } from "../turn.js";
 import { WORKER_PROMPT } from "../prompt.js";
 import { resolveLive, chatThinking } from "../providers.js";
+import { promptTraceContext, tracedStreamProvider, withPromptTrace } from "../prompt-trace.js";
 
 // Only narrate once a step is ACTUALLY slow — under this it lands with the answer
 // and a spoken bridge would just be chatter.
@@ -37,6 +38,11 @@ const WORKER_MAX_STEPS = 5;
  *  activity streams to `emit` (so the UI shows it working); its text is NEVER
  *  spoken — only the final findings string is returned for the main agent to say. */
 export async function runWorker(task: string, emit: Emit, signal: AbortSignal): Promise<string> {
+  const parent = promptTraceContext();
+  return withPromptTrace({ source: "worker", sessionId: parent?.sessionId }, () => runWorkerInner(task, emit, signal));
+}
+
+async function runWorkerInner(task: string, emit: Emit, signal: AbortSignal): Promise<string> {
   const { provider, model, apiKey } = resolveLive();
   if (!model || (!apiKey && !provider.keyless)) return "(no model configured for the lookup)";
 
@@ -56,7 +62,7 @@ export async function runWorker(task: string, emit: Emit, signal: AbortSignal): 
   for (let step = 0; step < WORKER_MAX_STEPS; step++) {
     if (signal.aborted) return "(cancelled)";
     const turn = await collectTurn(
-      streamProvider(provider, apiKey ?? undefined, { model, messages, tools: toolDefs, ...reasoning, maxTokens: 1024 }, signal),
+      tracedStreamProvider(provider, apiKey ?? undefined, { model, messages, tools: toolDefs, ...reasoning, maxTokens: 1024 }, signal),
       () => {}, // worker's own text is not spoken; discard its deltas
     );
     messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls.length ? turn.toolCalls : undefined });

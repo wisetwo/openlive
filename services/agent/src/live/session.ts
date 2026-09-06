@@ -11,6 +11,7 @@ import { buildFileTools } from "./file-tools.js";
 import { narrationEnabled, wrapEmitWithNarration, createCommentaryGate } from "./narrator.js";
 import { createBoundAgent, setBoundAgent, boundAgent, agentCwd, PERMISSION_CANCELLED, type Agent, type AgentId, type ElicitationAnswer, type ElicitationAsk, type PermissionAskOption, type ReplayMessage } from "../agents/index.js";
 import { log } from "../log.js";
+import { withPromptTrace } from "../prompt-trace.js";
 
 type Frame = { data: string; mime: string };
 type TurnFrame = Frame & { source: "camera" | "screen" };
@@ -291,26 +292,29 @@ export class LiveSession {
     // Both wrap the SAME emit, so every agent (and the built-in brain) behaves alike.
     const narrated = narrationEnabled(getSetting("narrateProgress")) ? wrapEmitWithNarration(emit, ac.signal) : emit;
     const gate = createCommentaryGate(narrated, ac.signal);
+    const traceSource = this.runner.isCoach() ? "english-coach" : "live";
     try {
-      if (this.agent) {
-        await this.agentReady?.catch(() => {}); // wait out the ACP handshake on the first turn
-        await this.agent.runTurn({ text, frames }, gate.emit, ac.signal);
-        await gate.flush();
-      } else if (this.boundId) {
-        // A coding agent is bound but not running (no folder yet, or its start
-        // failed). NEVER answer with the built-in brain as if it were the agent —
-        // that silently swaps who the user is talking to. Say what's wrong instead.
-        const label = agentLabel(this.boundId);
-        await emit({
-          type: "error",
-          message: this.boundCwd
-            ? `${label} isn't connected yet. Give it a moment, or switch agents and back to retry.`
-            : `${label} needs a project folder before it can start. Pick one from the folder menu in the top bar, then ask again.`,
-        });
-      } else {
-        await this.runner.runTurn(text, frames, gate.emit, ac.signal);
-        await gate.flush();
-      }
+      await withPromptTrace({ source: traceSource, sessionId: this.chatId }, async () => {
+        if (this.agent) {
+          await this.agentReady?.catch(() => {}); // wait out the ACP handshake on the first turn
+          await this.agent.runTurn({ text, frames }, gate.emit, ac.signal);
+          await gate.flush();
+        } else if (this.boundId) {
+          // A coding agent is bound but not running (no folder yet, or its start
+          // failed). NEVER answer with the built-in brain as if it were the agent —
+          // that silently swaps who the user is talking to. Say what's wrong instead.
+          const label = agentLabel(this.boundId);
+          await emit({
+            type: "error",
+            message: this.boundCwd
+              ? `${label} isn't connected yet. Give it a moment, or switch agents and back to retry.`
+              : `${label} needs a project folder before it can start. Pick one from the folder menu in the top bar, then ask again.`,
+          });
+        } else {
+          await this.runner.runTurn(text, frames, gate.emit, ac.signal);
+          await gate.flush();
+        }
+      });
     } catch (e) {
       if (!ac.signal.aborted) {
         log.error("live", "turn:", e);

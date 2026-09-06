@@ -1,9 +1,10 @@
-import { streamProvider, isReasoningModel, type Message, type Effort } from "@openlive/harness";
+import { isReasoningModel, type Message, type Effort } from "@openlive/harness";
 import { ENGLISH_COACH_PROMPT, englishCoachModelHistory, parseEnglishCoachResponse, suppressRedundantCoachCorrection } from "@openlive/shared";
 import { buildOpenLiveTools, type OpenLiveTool, type Emit } from "../tools.js";
 import { collectTurn, safeParseArgs } from "../turn.js";
 import { buildLivePrompt } from "../prompt.js";
 import { resolveLive, resolveVision, chatThinking, type ResolvedLive } from "../providers.js";
+import { tracedStreamProvider } from "../prompt-trace.js";
 import { runWorker } from "./worker.js";
 
 type Frame = { data: string; mime: string; source?: "camera" | "screen" };
@@ -18,7 +19,7 @@ async function describeFrames(v: ResolvedLive, userText: string, frames: Frame[]
     { role: "user", text: userText ? `The user said: "${userText}". What's visible?` : "What's visible right now?", images: frames.map((f) => ({ data: f.data, mime: f.mime })) },
   ];
   const turn = await collectTurn(
-    streamProvider(v.provider, v.apiKey ?? undefined, { model: v.model, messages, tools: [], maxTokens: 512 }, signal),
+    tracedStreamProvider(v.provider, v.apiKey ?? undefined, { model: v.model, messages, tools: [], maxTokens: 512 }, signal, { source: "vision" }),
     () => {}, // its text is not spoken; we fold the description into the live turn
   );
   return turn.text.trim();
@@ -74,7 +75,7 @@ export class LiveTurnRunner {
     const toolDefs = tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
     try {
       // maxTokens:1 — we only want the prefill (cache write); the output is discarded.
-      const gen = streamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, maxTokens: 1 }, signal);
+      const gen = tracedStreamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, maxTokens: 1 }, signal, { skip: true });
       for await (const ev of gen) { void ev; if (signal.aborted) break; }
     } catch { /* cold first turn is the fallback */ }
   }
@@ -158,7 +159,7 @@ export class LiveTurnRunner {
         if (signal.aborted) return;
         partial = "";
         let turn = await collectTurn(
-          streamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, ...reasoning, maxTokens }, signal),
+          tracedStreamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, ...reasoning, maxTokens }, signal),
           track,
         );
         // Reasoning-only finish: thinking ate max_tokens, or the model stopped
@@ -167,7 +168,7 @@ export class LiveTurnRunner {
         if (!turn.toolCalls.length && !turn.text.trim() && !emptyRetry && (turn.reasoning.trim() || turn.stopReason === "length")) {
           emptyRetry = true;
           turn = await collectTurn(
-            streamProvider(provider, apiKey ?? undefined, {
+            tracedStreamProvider(provider, apiKey ?? undefined, {
               model, messages: this.messages, tools: toolDefs, ...reasoning,
               ...(reasoning.thinking ? { thinking: "disabled" as const } : {}),
               maxTokens: Math.max(maxTokens, coach ? 2048 : 8192),
