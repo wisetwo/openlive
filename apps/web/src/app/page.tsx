@@ -11,7 +11,7 @@ import { SpotlightTour } from "@/components/SpotlightTour";
 import { AgentSelect } from "@/components/live/AgentControls";
 import { OpenLiveMark } from "@/components/OpenLiveMark";
 import { useAppVersion } from "@/lib/useAppVersion";
-import { setConversationBind } from "@/lib/live/useLiveSession";
+import { setConversationBind, setConversationKind } from "@/lib/live/useLiveSession";
 import { useLiveStore } from "@/lib/live/liveStore";
 import { loadModels, modelsCached, modelsReady } from "@/lib/live/models";
 import { wirePanelCmdRouter } from "@/lib/live/panelBridge";
@@ -61,10 +61,13 @@ export default function Home() {
   }, { scope: heroRef });
 
   const startNew = () => {
+    // Capture the hero pick BEFORE minting a new conversation id — English Coach
+    // lives in sessionKind, not boundAgent, and used to be dropped here.
+    const { boundAgent, sessionKind } = useLiveStore.getState();
     newConversation();
-    // Carry the hero's "Talk to" pick onto the freshly created conversation.
-    const pick = useLiveStore.getState().boundAgent;
-    if (pick) setConversationBind(useUi.getState().activeChatId, pick);
+    const chatId = useUi.getState().activeChatId;
+    if (sessionKind === "english-coach") setConversationKind(chatId, "english-coach");
+    else if (boundAgent) setConversationBind(chatId, boundAgent);
     setLiveOpen(true);
   };
 

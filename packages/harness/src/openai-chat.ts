@@ -67,6 +67,10 @@ export async function* streamOpenAIChat(opts: {
   // reasoning_content regardless), so we don't send the mapped Effort.
   if (req.reasoningEffort) body.reasoning_effort = req.reasoningEffort
   if (req.maxTokens) body.max_tokens = req.maxTokens
+  // DeepSeek V4: thinking is ON by default and shares the max_tokens budget with
+  // the spoken answer. Leaving it on with a live-sized cap often finishes as
+  // reasoning-only (empty content, no TTS). Other openai-chat hosts must not get this.
+  if (req.thinking) body.thinking = { type: req.thinking }
 
   const res = await fetchWithRetry(
     `${baseURL.replace(/\/$/, "")}/chat/completions`,

@@ -2,7 +2,7 @@ import { streamProvider, isReasoningModel, type Message } from "@openlive/harnes
 import { buildWorkerTools, type Emit } from "../tools.js";
 import { collectTurn, safeParseArgs } from "../turn.js";
 import { WORKER_PROMPT } from "../prompt.js";
-import { resolveLive } from "../providers.js";
+import { resolveLive, chatThinking } from "../providers.js";
 
 // Only narrate once a step is ACTUALLY slow — under this it lands with the answer
 // and a spoken bridge would just be chatter.
@@ -47,7 +47,10 @@ export async function runWorker(task: string, emit: Emit, signal: AbortSignal): 
     { role: "user", text: task },
   ];
   // Worker reasons as little as possible — we want its tool results, fast.
-  const reasoning = isReasoningModel(model) && provider.protocol === "openai" ? { reasoningEffort: "minimal" as const } : {};
+  const reasoning = {
+    ...chatThinking(provider),
+    ...(isReasoningModel(model) && provider.protocol === "openai" ? { reasoningEffort: "minimal" as const } : {}),
+  };
   let narrations = 0;
 
   for (let step = 0; step < WORKER_MAX_STEPS; step++) {

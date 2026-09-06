@@ -58,6 +58,9 @@ export interface ChatRequest {
    *  `effort`; ignored by other providers. Used by live mode for lowest latency. */
   reasoningEffort?: string
   maxTokens?: number
+  /** DeepSeek V4 Chat Completions thinking toggle. Other openai-chat hosts
+   *  typically 400 on this field — only set it for providers that document it. */
+  thinking?: "enabled" | "disabled"
 }
 
 /** Provider wire protocol — selects the adapter. Three adapters:

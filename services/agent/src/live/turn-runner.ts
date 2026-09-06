@@ -3,7 +3,7 @@ import { ENGLISH_COACH_PROMPT, englishCoachModelHistory, parseEnglishCoachRespon
 import { buildOpenLiveTools, type OpenLiveTool, type Emit } from "../tools.js";
 import { collectTurn, safeParseArgs } from "../turn.js";
 import { buildLivePrompt } from "../prompt.js";
-import { resolveLive, resolveVision, type ResolvedLive } from "../providers.js";
+import { resolveLive, resolveVision, chatThinking, type ResolvedLive } from "../providers.js";
 import { runWorker } from "./worker.js";
 
 type Frame = { data: string; mime: string; source?: "camera" | "screen" };
@@ -132,27 +132,55 @@ export class LiveTurnRunner {
 
     // Live wants the SNAPPIEST conversation. Auto = thinking OFF for an instant
     // reply — OpenAI can't fully disable it so we ask for "minimal"; Anthropic just
-    // omits the thinking block (no reasoning). A user override in Settings raises it.
-    // (MiniMax's reasoning is always-on and ignores this — see anthropic.ts.)
+    // omits the thinking block (no reasoning). DeepSeek V4 thinks by default and
+    // spends max_tokens on reasoning_content, so we send thinking:disabled unless
+    // the user raised effort. (MiniMax's reasoning is always-on — see anthropic.ts.)
     const reasons = isReasoningModel(model);
-    const reasoning = !reasons ? {}
-      : effort ? (provider.protocol === "openai" ? { reasoningEffort: effort as string } : { effort: effort as Effort })
-        : provider.protocol === "openai" ? { reasoningEffort: "minimal" as const }
-          : {};
+    const reasoning = {
+      ...chatThinking(provider, effort),
+      ...(!reasons ? {}
+        : effort ? (provider.protocol === "openai" ? { reasoningEffort: effort as string } : { effort: effort as Effort })
+          : provider.protocol === "openai" ? { reasoningEffort: "minimal" as const }
+            : {}),
+    };
 
     // Track assistant text AS it streams, so a barge-in that aborts mid-sentence
     // doesn't lose what we'd started saying.
     let partial = "";
     const track: Emit = (e) => { if (e.type === "text_delta") partial += e.text; return emit(e); };
 
+    const maxTokens = coach ? 800 : 4096;
+    const EMPTY_SPOKEN = "I thought that through but didn't get the words out. Say it again and I'll keep the answer short.";
+    let emptyRetry = false;
+
     try {
       for (let step = 0; step < MAX_STEPS; step++) {
         if (signal.aborted) return;
         partial = "";
-        const turn = await collectTurn(
-          streamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, ...reasoning, maxTokens: coach ? 800 : 4096 }, signal),
+        let turn = await collectTurn(
+          streamProvider(provider, apiKey ?? undefined, { model, messages: this.messages, tools: toolDefs, ...reasoning, maxTokens }, signal),
           track,
         );
+        // Reasoning-only finish: thinking ate max_tokens, or the model stopped
+        // after CoT. Retry once with thinking forced off and a larger cap so the
+        // call actually speaks; if that is still blank, say so instead of idling.
+        if (!turn.toolCalls.length && !turn.text.trim() && !emptyRetry && (turn.reasoning.trim() || turn.stopReason === "length")) {
+          emptyRetry = true;
+          turn = await collectTurn(
+            streamProvider(provider, apiKey ?? undefined, {
+              model, messages: this.messages, tools: toolDefs, ...reasoning,
+              ...(reasoning.thinking ? { thinking: "disabled" as const } : {}),
+              maxTokens: Math.max(maxTokens, coach ? 2048 : 8192),
+            }, signal),
+            track,
+          );
+        }
+        if (!turn.toolCalls.length && !turn.text.trim()) {
+          await emit({ type: "text_delta", text: EMPTY_SPOKEN });
+          this.messages.push({ role: "assistant", text: EMPTY_SPOKEN, reasoning: turn.reasoning || undefined });
+          await emit({ type: "usage", contextTokens: turn.usage.input, outputTokens: turn.usage.output, costUsd: 0 });
+          break;
+        }
         this.messages.push({
           role: "assistant",
           text: coach

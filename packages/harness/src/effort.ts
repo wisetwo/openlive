@@ -46,5 +46,5 @@ export function anthropicThinkingForm(id: string): "adaptive" | "budget" | "none
  *  source of truth (was copy-pasted in models.ts and the live turn runner). */
 export function isReasoningModel(id: string): boolean {
   if (/claude/i.test(id)) return anthropicThinkingForm(id) !== "none"
-  return /(^|[-/])(o\d|gpt-5|gpt-6)|reason|think|deepseek-r|r1|qwq|magistral|minimax-m/i.test(id)
+  return /(^|[-/])(o\d|gpt-5|gpt-6)|reason|think|deepseek-r|deepseek-v4|r1|qwq|magistral|minimax-m/i.test(id)
 }

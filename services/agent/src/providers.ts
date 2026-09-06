@@ -83,6 +83,14 @@ export function resolveVision(): ResolvedLive | null {
   return { provider, model, apiKey };
 }
 
+/** DeepSeek V4 thinking is ON by default and shares `max_tokens` with the
+ *  spoken answer. Live auto-effort therefore disables it so a call isn't
+ *  silence-then-nothing. Other openai-chat hosts 400 on this field. */
+export function chatThinking(provider: ProviderInfo, effort?: Effort): { thinking?: "enabled" | "disabled" } {
+  if (provider.id !== "deepseek" && !/deepseek\.com/i.test(provider.baseURL)) return {};
+  return { thinking: effort ? "enabled" : "disabled" };
+}
+
 export function resolveLive(): ResolvedLive {
   const providerId = liveProviderId();
   const provider = providerInfo(providerId) ?? BUILTIN_PROVIDERS[0]!;
