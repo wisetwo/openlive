@@ -116,13 +116,19 @@ export function buildTraceEntry(opts: {
     prompt,
     messages,
     messageCount: messages.length,
+    // Top-level `tools` is what Trace Lens renders (name / description / JSON Schema).
+    tools: request.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    })),
+    toolCount: request.tools.length,
     params: {
       model: request.model,
       effort: request.effort,
       reasoningEffort: request.reasoningEffort,
       maxTokens: request.maxTokens,
       thinking: request.thinking,
-      tools: request.tools.map((t) => t.name),
     },
     response: response ?? null,
     error: error ?? null,

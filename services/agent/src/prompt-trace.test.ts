@@ -28,7 +28,11 @@ describe("prompt-trace JSONL shape", () => {
         { role: "system", text: "Be concise" },
         { role: "user", text: "Hello" },
       ],
-      tools: [],
+      tools: [{
+        name: "look",
+        description: "Grab a fresh camera frame",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      }],
       maxTokens: 64,
     };
     const context = { source: "live", sessionId: "conversation-1" };
@@ -56,6 +60,12 @@ describe("prompt-trace JSONL shape", () => {
       system: "Be concise",
       prompt: "Hello",
       messageCount: 2,
+      toolCount: 1,
+      tools: [{
+        name: "look",
+        description: "Grab a fresh camera frame",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      }],
     });
     expect(lines[1]).toMatchObject({
       seq: 8,
