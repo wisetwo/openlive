@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, ChevronRight, ChevronsDownUp, Folder, Plus, Pencil, Trash2, AlertTriangle, Search } from "lucide-react";
-import { PromptTraceCopyButton } from "./PromptTraceCopyButton";
 import { api } from "@/lib/api";
 import { useUi } from "@/lib/uiStore";
 import { setConversationBind, setConversationFolder, setConversationResume } from "@/lib/live/useLiveSession";
@@ -338,9 +337,6 @@ function ChatRow({ c, cwd, showWorkspace, activeChatId, resume, requestDelete }:
         </span>
       </button>
       <span className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md bg-card/90 opacity-0 shadow-sm backdrop-blur-sm transition group-hover/s:opacity-100">
-        {c.source !== "external" && (
-          <PromptTraceCopyButton sessionId={c.id} className="grid size-6 place-items-center rounded text-muted-foreground transition hover:text-foreground" />
-        )}
         <button onClick={() => setEditing(true)} title="Rename" className="grid size-6 place-items-center rounded text-muted-foreground transition hover:text-foreground"><Pencil className="size-3" /></button>
         {(c.source !== "external" || canDeleteExternal(c.agentId)) && (
           <button onClick={del} title="Delete" className="grid size-6 place-items-center rounded text-muted-foreground transition hover:text-danger"><Trash2 className="size-3" /></button>

@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Check, Trash2, Eye, EyeOff, Brain, Zap, AlertTriangle, ChevronDown } from "lucide-react";
+import { KeyRound, Check, Trash2, Eye, EyeOff, Brain, Zap, AlertTriangle, ChevronDown, RotateCcw } from "lucide-react";
 // Pure subpaths only — the barrel pulls in catalog/models (node:fs), which can't
 // bundle into this client component.
 import { BUILTIN_PROVIDERS } from "@openlive/harness/registry";
 import { allowedEfforts } from "@openlive/harness/types";
-import { modelVision } from "@openlive/shared";
+import { modelVision, baseURLSettingKey, isAllowedBaseURL } from "@openlive/shared";
 import { api, type ModelInfo } from "@/lib/api";
 import { SearchSelect, type SearchOption } from "./SearchSelect";
 import { usePersistedOpen } from "@/lib/disclosure";
@@ -22,7 +22,7 @@ const hasVision = (providerId: string, m: ModelInfo) => m.vision ?? modelVision(
 
 // Every provider the harness supports. `protocol` drives which reasoning efforts
 // a model can take.
-const PROVIDERS = BUILTIN_PROVIDERS.map((p) => ({ id: p.id, name: p.name, protocol: p.protocol, keyless: !!p.keyless }));
+const PROVIDERS = BUILTIN_PROVIDERS.map((p) => ({ id: p.id, name: p.name, protocol: p.protocol, keyless: !!p.keyless, baseURL: p.baseURL }));
 
 // API-key entry bound to one provider (by registry id).
 function ProviderKey({ kind }: { kind: string }) {
@@ -58,6 +58,55 @@ function ProviderKey({ kind }: { kind: string }) {
           </button>
         )}
       </div>
+      {save.isError && <p className="text-label text-destructive">{(save.error as Error).message}</p>}
+    </div>
+  );
+}
+
+// Optional base URL override for one provider — requests (and the model list) go
+// to this local endpoint instead of the provider's own API, same wire format.
+function ProviderEndpoint({ kind }: { kind: string }) {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const info = PROVIDERS.find((p) => p.id === kind);
+  const key = baseURLSettingKey(kind);
+  const current = settings?.[key] ?? "";
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? current;
+  const save = useMutation({
+    mutationFn: (url: string) => api.updateSettings({ [key]: url }),
+    onSuccess: (s) => { qc.setQueryData(["settings"], s); qc.invalidateQueries({ queryKey: ["models", kind] }); setDraft(null); },
+  });
+  const trimmed = value.trim();
+  const invalid = !!trimmed && !isAllowedBaseURL(trimmed);
+  const dirty = trimmed !== current;
+
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <span className="text-label text-foreground">Custom endpoint <span className="text-muted-foreground">· optional</span></span>
+      <div className="flex items-center gap-2">
+        <input value={value} onChange={(e) => setDraft(e.target.value)} name={`${kind}-base-url`}
+          placeholder={info?.baseURL} aria-label={`${info?.name ?? kind} custom endpoint`} spellCheck={false}
+          onKeyDown={(e) => { if (e.key === "Enter" && dirty && !invalid) save.mutate(trimmed); }}
+          className="h-9 flex-1 rounded-lg border border-border bg-card px-3 font-mono text-label text-foreground outline-none focus:border-border-heavy" />
+        <button onClick={() => save.mutate(trimmed)} disabled={!dirty || invalid || save.isPending}
+          className="flex h-9 items-center gap-1.5 rounded-lg bg-foreground px-3.5 text-body font-medium text-background transition hover:opacity-90 disabled:opacity-30">
+          <Check className="size-4" /> Save
+        </button>
+        {current && (
+          <button onClick={() => save.mutate("")} disabled={save.isPending} title="Use the provider's default endpoint" aria-label="Reset endpoint"
+            className="grid size-9 place-items-center rounded-lg border border-border text-muted-foreground transition hover:border-border-heavy hover:text-foreground">
+            <RotateCcw className="size-4" />
+          </button>
+        )}
+      </div>
+      <p className="text-caption text-muted-foreground">
+        {invalid
+          ? <span className="text-destructive">Must be an http(s) URL on localhost / 127.0.0.1.</span>
+          : current
+            ? <>Requests go to <code className="text-foreground">{current}</code> — it must forward to <code>{info?.baseURL}</code> with the same paths.</>
+            : <>Point at a local proxy that forwards to <code>{info?.baseURL}</code>. Paths like <code>/{info?.protocol === "anthropic" ? "messages" : info?.protocol === "openai-chat" ? "chat/completions" : "responses"}</code> are appended.</>}
+      </p>
       {save.isError && <p className="text-label text-destructive">{(save.error as Error).message}</p>}
     </div>
   );
@@ -168,6 +217,7 @@ export function ModelsSettings() {
           ))}
         </div>
         <ProviderKey kind={providerId} />
+        <ProviderEndpoint key={providerId} kind={providerId} />
       </Section>
 
       <Section title="Model"

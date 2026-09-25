@@ -6,8 +6,6 @@ import { ensureSeedProviders } from "./providers.js";
 import { attachLiveWs } from "./live/ws.js";
 import type { Server } from "node:http";
 import { log } from "./log.js";
-import { promptTraceDir, promptTraceEnabled } from "./prompt-trace.js";
-
 loadEnv();
 await ensureSeedProviders(); // top-level await: seed before serving so first requests see keys
 
@@ -46,10 +44,6 @@ if (!isLoopback && !AGENT_SECRET) {
 const server = serve({ fetch: app.fetch, port, hostname: host }) as unknown as Server;
 const wss = attachLiveWs(server); // live voice+vision on ws://…/live
 console.log(`▸ OpenLive agent service listening on http://${host}:${port}`);
-if (promptTraceEnabled()) {
-  console.log(`▸ prompt traces → ${promptTraceDir()}  (pnpm trace:prompts)`);
-}
-
 server.on("error", (e: NodeJS.ErrnoException) => {
   if (e.code === "EADDRINUSE") log.error("agent", `port ${port} is already in use — kill the old process or set AGENT_PORT.`);
   else log.error("agent", "server error:", e);

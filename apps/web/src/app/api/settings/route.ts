@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAllSettings, setSetting } from "@openlive/db";
+import { BASE_URL_SETTING_PREFIX, isAllowedBaseURL } from "@openlive/shared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,8 +10,8 @@ export const dynamic = "force-dynamic";
 const DEFAULTS = { liveEffort: "auto" };
 const KEYS = ["liveModel", "liveProviderId", "liveEffort", "visionProviderId", "visionModel", "agentCwd", "customInstructions", "narrateProgress"];
 // Per-agent config keys (acpCommand:<id> ACP override, agentHidden:<id>
-// visibility toggle) are also readable/writable.
-const PREFIXES = ["acpCommand:", "agentHidden:"];
+// visibility toggle) and per-provider base URL overrides are also readable/writable.
+const PREFIXES = ["acpCommand:", "agentHidden:", BASE_URL_SETTING_PREFIX];
 
 const isExposed = (k: string) => KEYS.includes(k) || PREFIXES.some((p) => k.startsWith(p));
 
@@ -55,6 +56,9 @@ export async function PUT(req: Request) {
     if (typeof v !== "string" || !isExposed(k)) continue;
     if (k.startsWith("acpCommand:") && v.trim() && !isSafeAcpCommand(v)) {
       return NextResponse.json({ error: `Rejected unsafe command for ${k}` }, { status: 400 });
+    }
+    if (k.startsWith(BASE_URL_SETTING_PREFIX) && v.trim() && !isAllowedBaseURL(v.trim())) {
+      return NextResponse.json({ error: "Custom endpoint must be an http(s) URL on localhost / 127.0.0.1" }, { status: 400 });
     }
     await setSetting(k, v);
   }

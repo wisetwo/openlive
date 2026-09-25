@@ -1,7 +1,6 @@
 "use client";
 
 import { Settings2, Minimize2, PanelLeft } from "lucide-react";
-import { PromptTraceCopyButton } from "@/components/PromptTraceCopyButton";
 import { OpenLiveOrb } from "@/components/OpenLiveOrb";
 import { AgentSelect } from "./AgentControls";
 import { AgentBar, WorkspacePill } from "./AgentBar";
@@ -42,8 +41,6 @@ export function TopBar() {
   const openSettings = useUi((s) => s.openSettings);
   const setMinimized = useUi((s) => s.setMinimized);
   const toggleHistory = useUi((s) => s.toggleHistory);
-  const chatId = useUi((s) => s.activeChatId);
-
   return (
     // Three zones: [history + logo] · [centered agent cluster that grows outward] ·
     // [settings + minimize]. The 1fr side columns keep the middle cluster centered
@@ -70,8 +67,6 @@ export function TopBar() {
         <UsageChip />
       </div>
       <div className={cn("flex items-center gap-1 justify-self-end", noDrag)}>
-        <PromptTraceCopyButton sessionId={chatId} iconClass="size-4"
-          className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-foreground/10 hover:text-foreground" />
         <button onClick={openSettings} title="Settings" aria-label="Settings"
           className="grid size-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-foreground/10 hover:text-foreground"><Settings2 className="size-4" /></button>
         <button onClick={() => setMinimized(true)} title="Minimize to floating bar" aria-label="Minimize"

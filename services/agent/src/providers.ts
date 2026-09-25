@@ -3,13 +3,14 @@ import {
   getProviderApiKey, getSetting, setSetting,
 } from "@openlive/db";
 import { BUILTIN_PROVIDERS, defaultModel, type ProviderInfo, type Effort } from "@openlive/harness";
-import { liveRecsFor } from "@openlive/shared";
+import { liveRecsFor, baseURLSettingKey, withBaseURLOverride } from "@openlive/shared";
 
 // Provider-neutral resolution. Keys live in the DB `providers` table (kind =
 // harness provider id) or fall back to the provider's declared env vars.
 
 export function providerInfo(id: string): ProviderInfo | undefined {
-  return BUILTIN_PROVIDERS.find((p) => p.id === id);
+  const info = BUILTIN_PROVIDERS.find((p) => p.id === id);
+  return info && withBaseURLOverride(info, getSetting(baseURLSettingKey(id)));
 }
 
 // Seed a DB provider row for every builtin whose env key is present, so a host

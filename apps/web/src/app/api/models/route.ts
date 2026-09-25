@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { listProviders, getProviderApiKey } from "@openlive/db";
+import { listProviders, getProviderApiKey, getSetting } from "@openlive/db";
 import { BUILTIN_PROVIDERS, fetchModels } from "@openlive/harness";
+import { baseURLSettingKey, withBaseURLOverride } from "@openlive/shared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,10 @@ export async function GET(req: Request) {
     configured[0]?.kind ||
     BUILTIN_PROVIDERS[0]!.id;
 
-  const provider = BUILTIN_PROVIDERS.find((p) => p.id === providerId)!;
+  const provider = withBaseURLOverride(
+    BUILTIN_PROVIDERS.find((p) => p.id === providerId)!,
+    getSetting(baseURLSettingKey(providerId)),
+  );
   const row = configured.find((p) => p.kind === providerId);
   const key =
     (row ? getProviderApiKey(row.id) : null) ??
